@@ -25,6 +25,7 @@ import {
 } from "./headers.js";
 import { getOrCreateAls } from "./internal/als-registry.js";
 import {
+  type CacheRevalidationLease,
   runForegroundCacheRevalidation,
   scheduleBackgroundCacheRevalidation,
 } from "./internal/cache-revalidation.js";
@@ -539,6 +540,7 @@ async function refreshUnstableCacheResult<Args extends unknown[], Result>(
   cacheKey: string,
   tags: string[],
   revalidateSeconds: number | false | undefined,
+  lease?: CacheRevalidationLease,
 ): Promise<Result> {
   const lastModified = Date.now();
   const result = await _unstableCacheAls.run(true, () => fn(...args));
@@ -558,12 +560,14 @@ async function refreshUnstableCacheResult<Args extends unknown[], Result>(
     revalidate: typeof revalidateSeconds === "number" ? revalidateSeconds : false,
   };
 
-  await getDataCacheHandler().set(cacheKey, cacheValue, {
-    fetchCache: true,
-    lastModified,
-    tags,
-    revalidate: revalidateSeconds,
-  });
+  const write = () =>
+    getDataCacheHandler().set(cacheKey, cacheValue, {
+      fetchCache: true,
+      lastModified,
+      tags,
+      revalidate: revalidateSeconds,
+    });
+  await (lease ? lease.write(write) : write());
 
   return result;
 }
@@ -647,9 +651,9 @@ export function unstable_cache<T extends (...args: any[]) => Promise<any>>(
               // before the regenerated entry is stored.
               scheduleBackgroundCacheRevalidation(
                 cacheKey,
-                () =>
+                (lease) =>
                   runWithRequestContext(createCacheRevalidationContext(softTags), () =>
-                    refreshUnstableCacheResult(fn, args, cacheKey, tags, revalidateSeconds),
+                    refreshUnstableCacheResult(fn, args, cacheKey, tags, revalidateSeconds, lease),
                   ),
                 (error) => {
                   console.error(
@@ -673,8 +677,8 @@ export function unstable_cache<T extends (...args: any[]) => Promise<any>>(
     if (isDraftMode) {
       return await _unstableCacheAls.run(true, () => fn(...args));
     }
-    return await runForegroundCacheRevalidation(cacheKey, () =>
-      refreshUnstableCacheResult(fn, args, cacheKey, tags, revalidateSeconds),
+    return await runForegroundCacheRevalidation(cacheKey, (lease) =>
+      refreshUnstableCacheResult(fn, args, cacheKey, tags, revalidateSeconds, lease),
     );
   };
 

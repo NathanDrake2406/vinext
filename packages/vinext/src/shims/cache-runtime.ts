@@ -46,6 +46,7 @@ import {
 import { VINEXT_RSC_MARKER_HEADER } from "../server/headers.js";
 import { addCollectedRequestTags, getCurrentFetchSoftTags } from "./fetch-cache.js";
 import {
+  type CacheRevalidationLease,
   hasPendingCacheRevalidation,
   runForegroundCacheRevalidation,
   scheduleBackgroundCacheRevalidation,
@@ -741,7 +742,10 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
 
       // Both misses and stale refreshes use the same serialization and key-selection
       // path, including root params read by lazy Server Components.
-      const refreshSharedCacheEntry = async (background = false): Promise<TResult> => {
+      const refreshSharedCacheEntry = async (
+        background = false,
+        lease?: CacheRevalidationLease,
+      ): Promise<TResult> => {
         const lastModified = Date.now();
         const { result, ctx, effectiveLife, collectedResult } = await runCachedFunctionWithContext(
           fn,
@@ -776,9 +780,13 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
                   ? coarseCacheKey + computeRootParamsCacheKeySuffix(rootParams, rootParamNames)
                   : cacheKey;
               if (existing?.value) {
-                await handler.set(finalKey, null, { fetchCache: true });
+                const deleteEntry = (key: string) =>
+                  lease
+                    ? lease.write(() => handler.set(key, null, { fetchCache: true }))
+                    : handler.set(key, null, { fetchCache: true });
+                await deleteEntry(finalKey);
                 if (finalKey !== cacheKey) {
-                  await handler.set(cacheKey, null, { fetchCache: true });
+                  await deleteEntry(cacheKey);
                 }
               }
               return collectedResult.result;
@@ -814,26 +822,30 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
                 ...ctx.tags,
                 ...[...rootParamNames].map((name) => ROOT_PARAM_TAG_PREFIX + name),
               ];
-              await handler.set(
-                coarseCacheKey,
-                {
-                  kind: "FETCH",
-                  data: {
-                    headers: { [ROOT_PARAM_REDIRECT_HEADER]: "1" },
-                    body: "",
-                    url: coarseCacheKey,
+              const writeRedirect = () =>
+                handler.set(
+                  coarseCacheKey,
+                  {
+                    kind: "FETCH",
+                    data: {
+                      headers: { [ROOT_PARAM_REDIRECT_HEADER]: "1" },
+                      body: "",
+                      url: coarseCacheKey,
+                    },
+                    tags: redirectTags,
+                    revalidate: revalidateSeconds,
                   },
-                  tags: redirectTags,
-                  revalidate: revalidateSeconds,
-                },
-                { ...cacheContext, tags: redirectTags },
-              );
+                  { ...cacheContext, tags: redirectTags },
+                );
+              await (lease ? lease.write(writeRedirect) : writeRedirect());
               // Write the useful entry last. A bounded LRU that can retain only
               // one of the pair must keep the specific value, not the redirect.
               cacheValue.data.url = specificCacheKey;
-              await handler.set(specificCacheKey, cacheValue, cacheContext);
+              const writeValue = () => handler.set(specificCacheKey, cacheValue, cacheContext);
+              await (lease ? lease.write(writeValue) : writeValue());
             } else {
-              await handler.set(cacheKey, cacheValue, cacheContext);
+              const writeValue = () => handler.set(cacheKey, cacheValue, cacheContext);
+              await (lease ? lease.write(writeValue) : writeValue());
             }
           } catch (error) {
             // A handler failure skips caching but must not fail the render.
@@ -896,7 +908,9 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
       );
       const refreshSharedCacheEntryInForeground = (): Promise<TResult> =>
         existing || hasPendingCacheRevalidation(cacheKey)
-          ? runForegroundCacheRevalidation(cacheKey, () => refreshSharedCacheEntry())
+          ? runForegroundCacheRevalidation(cacheKey, (lease) =>
+              refreshSharedCacheEntry(false, lease),
+            )
           : refreshSharedCacheEntry();
       if (
         existing?.value?.kind === "FETCH" &&
@@ -930,9 +944,9 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
           const refreshContext = createCacheRevalidationContext(softTags);
           scheduleBackgroundCacheRevalidation(
             cacheKey,
-            () =>
+            (lease) =>
               cacheContextStorage.exit(() =>
-                runWithRequestContext(refreshContext, () => refreshSharedCacheEntry(true)),
+                runWithRequestContext(refreshContext, () => refreshSharedCacheEntry(true, lease)),
               ),
             (error) => {
               console.error("[vinext] use cache background revalidation failed:", error);

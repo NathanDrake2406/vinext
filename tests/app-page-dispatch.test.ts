@@ -60,6 +60,7 @@ import { isPromiseLike } from "../packages/vinext/src/utils/promise.js";
 import { isUnknownRecord } from "../packages/vinext/src/utils/record.js";
 import { extractRscCompletionMetadata } from "../packages/vinext/src/server/rsc-completion-metadata.js";
 import { VINEXT_INTERCEPTION_ID_HEADER } from "../packages/vinext/src/server/headers.js";
+import { getFunctionCacheRevalidationMode } from "../packages/vinext/src/shims/cache-request-state.js";
 
 type TestRoute = {
   __buildTimeClassifications?: ReadonlyMap<number, "static" | "dynamic"> | null;
@@ -689,6 +690,42 @@ describe("app page dispatch", () => {
       }
     },
   );
+
+  it("keeps function revalidation in background mode for a direct interception response", async () => {
+    // Direct interception responses are dynamic and not persisted, matching Next.js:
+    // test/e2e/app-dir/dynamic-interception-route-revalidate/dynamic-interception-route-revalidate.test.ts
+    const sourceRoute = createRoute({ params: [], pattern: "/feed", routeSegments: ["feed"] });
+    let observedMode: ReturnType<typeof getFunctionCacheRevalidationMode> | undefined;
+    const { options } = createDispatchOptions({
+      isProduction: true,
+      isRscRequest: true,
+      interceptionContext: "/feed",
+      revalidateSeconds: 60,
+      findIntercept: () => ({
+        matchedParams: {},
+        page: { default: "modal-page" },
+        slotId: "slot:modal:/feed",
+        slotKey: "modal@app/feed/@modal",
+        sourceRouteIndex: 1,
+      }),
+      getSourceRoute: (index) => (index === 1 ? sourceRoute : undefined),
+      resolveRouteDynamicConfig: (route) => (route === sourceRoute ? "force-dynamic" : undefined),
+      buildPageElement: async () => {
+        observedMode = getFunctionCacheRevalidationMode();
+        return "intercepted";
+      },
+      renderToReadableStream: () => createStream(["intercepted"]),
+    });
+    const context = createRequestContext({
+      functionCacheRevalidationMode: "background",
+      headersContext: { headers: new Headers(), cookies: new Map() },
+    });
+
+    const response = await runWithRequestContext(context, () => dispatchAppPage(options));
+
+    await expect(response.text()).resolves.toBe("intercepted");
+    expect(observedMode).toBe("background");
+  });
 
   it("does not probe layouts below an active ancestor loading boundary", async () => {
     const probeLayoutAt = vi.fn((_layoutIndex: number) => null);

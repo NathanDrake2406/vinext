@@ -219,12 +219,9 @@ describe("function cache revalidation", () => {
   );
 
   it.each(["use-cache", "unstable-cache"])(
-    "orders a foreground %s refresh after older background work",
+    "repairs a superseded background %s write that completes late",
     async (api) => {
       const handler = new MemoryCacheHandler();
-      setCacheHandler(handler);
-      const clock = vi.spyOn(Date, "now").mockReturnValue(100_000);
-      let value = "initial";
       let release = () => {};
       const gate = new Promise<void>((resolve) => {
         release = resolve;
@@ -233,12 +230,19 @@ describe("function cache revalidation", () => {
       const backgroundStarted = new Promise<void>((resolve) => {
         started = resolve;
       });
-      const source = async () => {
-        const captured = value;
-        if (captured === "background") {
+      const set = handler.set.bind(handler);
+      vi.spyOn(handler, "set").mockImplementation(async (key, data, ctx) => {
+        if (data?.kind === "FETCH" && data.data.body.includes("background")) {
           started();
           await gate;
         }
+        await set(key, data, ctx);
+      });
+      setCacheHandler(handler);
+      const clock = vi.spyOn(Date, "now").mockReturnValue(100_000);
+      let value = "initial";
+      const source = async () => {
+        const captured = value;
         if (api === "use-cache") cacheLife({ revalidate: 1, expire: 60 });
         return captured;
       };
@@ -269,8 +273,8 @@ describe("function cache revalidation", () => {
       clock.mockReturnValue(103_000);
       const foreground = read("foreground");
       try {
-        release();
         expect(await foreground).toBe("foreground");
+        release();
         await Promise.all(pending);
         expect(await read("background")).toBe("foreground");
       } finally {

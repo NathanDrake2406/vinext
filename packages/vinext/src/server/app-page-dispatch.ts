@@ -734,6 +734,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     });
   }
 
+  let shouldUseForegroundFunctionCache = false;
   if (
     !isRouteCacheabilityProbe() &&
     options.bypassInterceptionContextCache !== true &&
@@ -891,6 +892,7 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
     if (cachedPageResponse) {
       return cachedPageResponse;
     }
+    shouldUseForegroundFunctionCache = true;
     // A miss or expired artifact falls through to a cache-producing render.
     // This includes pages whose cacheLife is discovered during rendering.
     if (!(options.isRscRequest && options.mountedSlotsHeader)) {
@@ -942,6 +944,11 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
 
   let interceptDynamicConfig: string | null | undefined;
   let interceptDynamicConfigResolved = false;
+  const resetFunctionCacheModeForIntercept =
+    shouldUseForegroundFunctionCache && !(options.isRscRequest && options.mountedSlotsHeader);
+  if (resetFunctionCacheModeForIntercept) {
+    setFunctionCacheRevalidationMode("background");
+  }
   const interceptResult = await resolveAppPageIntercept<
     TRoute,
     unknown,
@@ -1046,6 +1053,10 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
   });
   if (interceptResult.response) {
     return interceptResult.response;
+  }
+
+  if (resetFunctionCacheModeForIntercept) {
+    setFunctionCacheRevalidationMode("auto");
   }
 
   const buildCurrentPageElement = () =>
