@@ -38,7 +38,39 @@ import { normalizeDefaultLocalePathname, stripI18nLocaleForApiRoute } from "./pa
 import { mergeRewriteQuery } from "../utils/query.js";
 import { addBasePathToPathname, hasBasePath } from "../utils/base-path.js";
 import { patternToNextFormat } from "../routing/route-validation.js";
-import { isOnDemandRevalidateRequest, PRERENDER_REVALIDATE_HEADER } from "./isr-cache.js";
+import {
+  isOnDemandRevalidateRequest,
+  PRERENDER_REVALIDATE_HEADER,
+} from "./revalidation-request.js";
+import {
+  methodNotAllowedResponse,
+  sanitizeMethodNotAllowedHeaders,
+} from "./http-error-responses.js";
+import { markRouteCacheabilityDynamic } from "vinext/shims/cacheability-classification";
+import type { PagesRouteDataKind } from "./pages-route-data-kind.js";
+
+function ruleUsesUnkeyedRequestCondition(rule: NextRedirect | NextRewrite): boolean {
+  return [...(rule.has ?? []), ...(rule.missing ?? [])].some(
+    (condition) =>
+      condition.type === "header" || condition.type === "cookie" || condition.type === "host",
+  );
+}
+
+function markConditionalRewriteCacheability(rewrite: NextRewrite): void {
+  if (ruleUsesUnkeyedRequestCondition(rewrite)) {
+    markRouteCacheabilityDynamic(
+      "next.config rewrite depends on request headers, cookies, or hostnames",
+    );
+  }
+}
+
+function markConditionalRedirectCacheability(redirect: NextRedirect): void {
+  if (ruleUsesUnkeyedRequestCondition(redirect)) {
+    markRouteCacheabilityDynamic(
+      "next.config redirect depends on request headers, cookies, or hostnames",
+    );
+  }
+}
 
 // All "render options" that are passed through to the renderPage callback
 export type PagesRenderOptions = {
@@ -49,8 +81,20 @@ export type PagesRenderOptions = {
 
 export type FilesystemRoutePhase = "direct" | "beforeFiles" | "afterFiles" | "fallback";
 
+function headersFromRecord(record: HeaderRecord): Headers {
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(record)) {
+    if (Array.isArray(value)) {
+      for (const item of value) headers.append(name, item);
+    } else {
+      headers.set(name, value);
+    }
+  }
+  return headers;
+}
+
 type PageRouteMatch = {
-  route: { isDynamic: boolean; pattern?: string; dataKind?: "static" | "server" | "none" };
+  route: { isDynamic: boolean; pattern?: string; dataKind?: PagesRouteDataKind };
 };
 
 export async function fetchWorkerFilesystemRoute(
@@ -58,10 +102,16 @@ export async function fetchWorkerFilesystemRoute(
   requestPathname: string,
   phase: FilesystemRoutePhase,
   fetchAsset: (request: Request) => Promise<Response>,
+  publicFiles?: ReadonlySet<string>,
+  isDirectBuildAsset = false,
 ): Promise<Response | false> {
+  const isRetrievalMethod = request.method === "GET" || request.method === "HEAD";
   if (
-    phase === "direct" ||
-    (request.method !== "GET" && request.method !== "HEAD") ||
+    (phase === "direct" && isRetrievalMethod) ||
+    (phase === "direct" &&
+      publicFiles !== undefined &&
+      !isDirectBuildAsset &&
+      !publicFiles.has(requestPathname)) ||
     requestPathname === "/api" ||
     requestPathname.startsWith("/api/")
   ) {
@@ -70,12 +120,29 @@ export async function fetchWorkerFilesystemRoute(
   const assetUrl = new URL(request.url);
   assetUrl.pathname = requestPathname;
   assetUrl.search = "";
-  const response = await fetchAsset(new Request(assetUrl, request));
-  return response.status === 404 ? false : response;
+  // Never forward a mutating method or body to the asset binding. A HEAD probe
+  // establishes existence without reading the asset body; only a real asset is
+  // then converted to the framework's deterministic 405 response.
+  const assetRequest = isRetrievalMethod
+    ? new Request(assetUrl, request)
+    : new Request(assetUrl, { method: "HEAD", headers: request.headers });
+  const response = await fetchAsset(assetRequest);
+  if (response.status === 404) return false;
+  if (!isRetrievalMethod) {
+    if (response.body && !response.body.locked) {
+      void response.body.cancel().catch(() => {
+        // Ignore cancellation failures for the discarded existence probe.
+      });
+    }
+    return methodNotAllowedResponse("GET, HEAD");
+  }
+  return response;
 }
 
 export type MiddlewareResult = {
   continue: boolean;
+  /** The pathname matches middleware, irrespective of request `has`/`missing` conditions. */
+  pathnameEligible?: boolean;
   redirectUrl?: string;
   redirectStatus?: number;
   rewriteUrl?: string;
@@ -106,6 +173,8 @@ export type PagesPipelineDeps = {
   isDataRequest: boolean; // trusted data classification for middleware protocol handling
   hasMiddleware: boolean; // true only when the app defines middleware/proxy
   ctx?: unknown; // Cloudflare ExecutionContext or undefined (for Node)
+  /** False when routing and middleware run outside the shared response stage. */
+  recordCacheability?: boolean;
   // Raw, un-re-encoded query string (incl. leading "?") for building redirect Location
   // headers. Node adapters that build the Web Request from a raw req.url string should
   // pass it so the redirect query isn't re-encoded by URL parsing (e.g. a literal "#"
@@ -126,6 +195,15 @@ export type PagesPipelineDeps = {
 
   // Route + render/api callbacks (optional — if absent, emit intent instead of Response)
   matchPageRoute?: ((pathname: string, request: Request) => PageRouteMatch | null) | null;
+  /**
+   * Return the matching Pages (or hybrid App) API route, if one exists.
+   *
+   * When supplied, an `/api/*` filesystem miss continues through afterFiles and
+   * fallback rewrites instead of being committed to the API 404 response.
+   */
+  matchApiRoute?:
+    | ((url: string, request: Request) => PageRouteMatch | null | Promise<PageRouteMatch | null>)
+    | null;
   runMiddleware?:
     | ((
         request: Request,
@@ -133,6 +211,10 @@ export type PagesPipelineDeps = {
         opts: { isDataRequest: boolean },
       ) => Promise<MiddlewareResult>)
     | null;
+  /** Original URL presented to middleware when URL normalization is disabled. */
+  middlewareRequest?: Request;
+  /** Stale/malformed data response emitted only if middleware does not handle the request. */
+  dataNotFoundResponse?: Response | null;
   renderPage?:
     | ((
         request: Request,
@@ -141,7 +223,14 @@ export type PagesPipelineDeps = {
         stagedHeaders?: Headers,
       ) => Promise<Response>)
     | null;
-  handleApi?: ((request: Request, apiUrl: string, ctx: unknown) => Promise<Response>) | null;
+  handleApi?:
+    | ((
+        request: Request,
+        apiUrl: string,
+        ctx: unknown,
+        stagedHeaders: Headers,
+      ) => Promise<Response>)
+    | null;
   /**
    * Optional override for proxying external rewrite destinations.
    * When supplied, the pipeline calls this instead of proxyExternalRequest(currentRequest, url).
@@ -153,7 +242,7 @@ export type PagesPipelineDeps = {
   /**
    * Optional filesystem/static-asset probe supplied by each runtime adapter.
    * Called post-middleware (so middleware can intercept/redirect public files) with the
-   * original basePath-stripped pathname and the staged middleware response headers.
+   * resolved basePath-stripped pathname and URL plus the staged middleware response headers.
    * Node may write directly to `res` and return true; dev/Workers return a Response.
    * Resolves false to continue through rewrites, API routes, and page rendering.
    */
@@ -162,6 +251,7 @@ export type PagesPipelineDeps = {
         requestPathname: string,
         stagedHeaders: HeaderRecord,
         phase: FilesystemRoutePhase,
+        resolvedUrl: string,
       ) => Promise<boolean | Response>)
     | null;
 };
@@ -217,6 +307,8 @@ export type PagesPipelineResult =
   | {
       type: "api";
       apiUrl: string;
+      /** True only when next.config rewrites changed API resolution. */
+      configRewriteFired: boolean;
       stagedHeaders: HeaderRecord;
       /** Post-middleware request headers — dev adapters apply these to req.headers before API handler. */
       requestHeaders: Headers;
@@ -254,6 +346,10 @@ export async function runPagesRequest(
     isDataReq,
     isDataRequest,
   } = deps;
+  const conditionalRedirectCacheability =
+    deps.recordCacheability === false ? undefined : markConditionalRedirectCacheability;
+  const conditionalRewriteCacheability =
+    deps.recordCacheability === false ? undefined : markConditionalRewriteCacheability;
 
   // Proxy helper: use deps.proxyExternal when supplied (dev adapter forwards
   // Node req body), otherwise fall back to proxyExternalRequest(currentReq, url).
@@ -303,6 +399,7 @@ export async function runPagesRequest(
       configRedirects,
       reqCtx,
       basePathState,
+      conditionalRedirectCacheability,
     );
     if (redirect) {
       // Only prepend basePath when the request was actually under basePath.
@@ -333,17 +430,44 @@ export async function runPagesRequest(
   let resolvedUrl = originalResolvedUrl;
   let resolvedPathnameIsRequestPathname = true;
   const middlewareHeaders: HeaderRecord = {};
+  const mergeConfigHeadersIntoEarlyResponse = (response: Response): Response => {
+    if (configHeaders.length === 0) return response;
+    const matchedConfigHeaders: HeaderRecord = {};
+    applyConfigHeadersToHeaderRecord(matchedConfigHeaders, {
+      configHeaders,
+      pathname: requestConfigMatchPathname,
+      requestContext: reqCtx,
+      basePathState,
+      recordCacheability: deps.recordCacheability,
+    });
+    return mergeHeaders(response, matchedConfigHeaders);
+  };
   let middlewareStatus: number | undefined;
   const serveFilesystemRoute = async (
     requestPathname: string,
     phase: FilesystemRoutePhase,
   ): Promise<PagesPipelineResult | null> => {
     if (!deps.serveFilesystemRoute) return null;
-    const served = await deps.serveFilesystemRoute(requestPathname, middlewareHeaders, phase);
+    const served = await deps.serveFilesystemRoute(
+      requestPathname,
+      middlewareHeaders,
+      phase,
+      resolvedUrl,
+    );
     if (served instanceof Response) {
+      const isStaticMethodNotAllowed =
+        served.status === 405 && served.headers.get("allow") === "GET, HEAD";
+      const response = mergeHeaders(
+        served,
+        middlewareHeaders,
+        isStaticMethodNotAllowed ? undefined : middlewareStatus,
+      );
+      if (isStaticMethodNotAllowed) {
+        sanitizeMethodNotAllowedHeaders(response.headers, "GET, HEAD");
+      }
       return {
         type: "response",
-        response: mergeHeaders(served, middlewareHeaders, middlewareStatus),
+        response,
       };
     }
     return served ? { type: "handled" } : null;
@@ -353,7 +477,13 @@ export async function runPagesRequest(
   // parity, this keeps the internal credential out of user middleware and any
   // external destination it may choose.
   if (!isOnDemandRevalidate && typeof deps.runMiddleware === "function") {
-    const result = await deps.runMiddleware(request, deps.ctx ?? null, { isDataRequest });
+    const result = await deps.runMiddleware(deps.middlewareRequest ?? request, deps.ctx ?? null, {
+      isDataRequest,
+    });
+
+    if (deps.recordCacheability !== false && result.pathnameEligible) {
+      markRouteCacheabilityDynamic("middleware can match this pathname");
+    }
 
     // Bubble waitUntil promises
     if (result.waitUntilPromises && result.waitUntilPromises.length > 0) {
@@ -395,14 +525,19 @@ export async function runPagesRequest(
         }
         return {
           type: "response",
-          response: new Response(null, {
-            status: result.redirectStatus ?? 307,
-            headers,
-          }),
+          response: mergeConfigHeadersIntoEarlyResponse(
+            new Response(null, {
+              status: result.redirectStatus ?? 307,
+              headers,
+            }),
+          ),
         };
       }
       if (result.response) {
-        return { type: "response", response: result.response };
+        return {
+          type: "response",
+          response: mergeConfigHeadersIntoEarlyResponse(result.response),
+        };
       }
     }
 
@@ -433,11 +568,17 @@ export async function runPagesRequest(
     middlewareStatus = result.status ?? result.rewriteStatus;
   }
 
+  if (deps.dataNotFoundResponse && resolvedUrl === originalResolvedUrl) {
+    return {
+      type: "response",
+      response: mergeHeaders(deps.dataNotFoundResponse, middlewareHeaders, middlewareStatus),
+    };
+  }
+
   // Step 6: Unpack middleware request headers
   const { postMwReqCtx, request: postMwReq } = applyMiddlewareRequestHeaders(
     middlewareHeaders,
     request,
-    { preserveCredentialHeaders: isExternalUrl(resolvedUrl) },
   );
   request = postMwReq;
   const pathnameForResolvedUrl = (value: string): string => value.split("#", 1)[0].split("?", 1)[0];
@@ -497,6 +638,7 @@ export async function runPagesRequest(
       pathname: requestConfigMatchPathname,
       requestContext: reqCtx,
       basePathState,
+      recordCacheability: deps.recordCacheability,
     });
   }
 
@@ -516,14 +658,6 @@ export async function runPagesRequest(
     };
   }
 
-  // Step 8b: Public-directory static files (post-middleware).
-  // Served after middleware so middleware can intercept/redirect public files, and
-  // before rewrites so a real public file wins over a fallback rewrite — matching the
-  // pre-refactor prod-server ordering. Adapter callbacks own their path guards;
-  // a true result means Node already wrote the response.
-  const directFilesystemResult = await serveFilesystemRoute(pathname, "direct");
-  if (directFilesystemResult) return directFilesystemResult;
-
   // Step 9: beforeFiles rewrites
   // Next.js server-utils.ts applies every beforeFiles rule in sequence and
   // continues afterFiles/fallback rules until a destination resolves.
@@ -534,6 +668,8 @@ export async function runPagesRequest(
       [rewrite],
       rewriteRequestContext(),
       basePathState,
+      configSourcePathname(),
+      conditionalRewriteCacheability,
     );
     if (rewritten) {
       if (isExternalUrl(rewritten)) {
@@ -547,13 +683,17 @@ export async function runPagesRequest(
     }
   }
 
-  // beforeFiles destinations re-enter filesystem matching before API/page
-  // routing. afterFiles and fallback rewrites repeat the same checkpoint in
-  // their phase-specific loops below.
-  if (configRewriteFired) {
-    const beforeFilesResult = await serveFilesystemRoute(resolvedPathname, "beforeFiles");
-    if (beforeFilesResult) return beforeFilesResult;
-  }
+  // Next.js resolves middleware and every beforeFiles rewrite before checking
+  // the filesystem. This matters when a rewrite moves an existing public-file
+  // pathname to a page or API route: the rewritten destination wins rather
+  // than the original file producing a static response (or method-level 405).
+  // afterFiles and fallback rewrites repeat the same checkpoint in their
+  // phase-specific loops below.
+  const initialFilesystemResult = await serveFilesystemRoute(
+    resolvedPathname,
+    resolvedPathnameIsRequestPathname ? "direct" : "beforeFiles",
+  );
+  if (initialFilesystemResult) return initialFilesystemResult;
 
   const isOutsideBasePathUnclaimed = () => basePath && !hadBasePath && !configRewriteFired;
   const outOfBasePathNotFound = (): PagesPipelineResult => ({
@@ -569,6 +709,10 @@ export async function runPagesRequest(
     const apiLookupUrl = stripI18nLocaleForApiRoute(resolvedUrl, i18nConfig);
     const apiLookupPathname = apiLookupUrl.split("?")[0];
     if (!apiLookupPathname.startsWith("/api/") && apiLookupPathname !== "/api") return null;
+    // Next.js performs the API filesystem check before afterFiles/fallback
+    // rewrites. Only a real API match owns the request at this point; a miss
+    // must continue through the remaining custom-route phases.
+    if (deps.matchApiRoute && !(await deps.matchApiRoute(apiLookupUrl, request))) return null;
     if (typeof deps.handleApi === "function") {
       let apiRequest = request;
       // Prod re-adds basePath only when the original request carried it.
@@ -579,18 +723,33 @@ export async function runPagesRequest(
         apiRequestUrl.pathname = addBasePathToPathname(apiRequestUrl.pathname, basePath);
         apiRequest = cloneRequestWithUrl(request, apiRequestUrl.toString());
       }
-      const response = await deps.handleApi(apiRequest, apiLookupUrl, deps.ctx ?? null);
+      const response = await deps.handleApi(
+        apiRequest,
+        apiLookupUrl,
+        deps.ctx ?? null,
+        headersFromRecord(middlewareHeaders),
+      );
+      const merged = mergeHeaders(response, middlewareHeaders, middlewareStatus);
+      // Preserve the streaming marker so the adapter can decide stream-vs-buffer.
+      // mergeHeaders may create a new Response object (losing non-standard
+      // properties), so copy the marker from the original API response.
+      if (merged !== response) {
+        (merged as { __vinextStreamedApiResponse?: boolean }).__vinextStreamedApiResponse = (
+          response as { __vinextStreamedApiResponse?: boolean }
+        ).__vinextStreamedApiResponse;
+      }
       return {
         type: "response",
         // API routes return arbitrary data; default a missing content-type to
         // application/octet-stream (not text/html) to avoid content sniffing.
         defaultContentType: "application/octet-stream",
-        response: mergeHeaders(response, middlewareHeaders, middlewareStatus),
+        response: merged,
       };
     }
     return {
       type: "api",
       apiUrl: apiLookupUrl,
+      configRewriteFired,
       stagedHeaders: middlewareHeaders,
       requestHeaders: request.headers,
       middlewareStatus,
@@ -616,6 +775,8 @@ export async function runPagesRequest(
         [rewrite],
         rewriteRequestContext(),
         basePathState,
+        configSourcePathname(),
+        conditionalRewriteCacheability,
       );
       if (rewritten) {
         if (isExternalUrl(rewritten)) {
@@ -668,6 +829,8 @@ export async function runPagesRequest(
           [rewrite],
           rewriteRequestContext(),
           basePathState,
+          configSourcePathname(),
+          conditionalRewriteCacheability,
         );
         if (!fallbackRewrite) continue;
         if (isExternalUrl(fallbackRewrite)) {
@@ -707,14 +870,7 @@ export async function runPagesRequest(
     // Convert staged middleware headers to a Web Headers object for renderPage.
     // Adapters that need to inject per-request values (e.g. CSP nonces) into the
     // rendered HTML can access them via this argument.
-    const stagedHeaders = new Headers();
-    for (const [k, v] of Object.entries(middlewareHeaders)) {
-      if (Array.isArray(v)) {
-        for (const item of v) stagedHeaders.append(k, item);
-      } else {
-        stagedHeaders.set(k, v);
-      }
-    }
+    const stagedHeaders = headersFromRecord(middlewareHeaders);
 
     let response = await deps.renderPage(request, resolvedUrl, initialRenderOptions, stagedHeaders);
 
@@ -727,6 +883,8 @@ export async function runPagesRequest(
           [rewrite],
           rewriteRequestContext(),
           basePathState,
+          configSourcePathname(),
+          conditionalRewriteCacheability,
         );
         if (!fallbackRewrite) continue;
         if (isExternalUrl(fallbackRewrite)) {
@@ -816,6 +974,8 @@ export async function runPagesRequest(
         [rewrite],
         rewriteRequestContext(),
         basePathState,
+        configSourcePathname(),
+        conditionalRewriteCacheability,
       );
       if (!fallbackRewrite) continue;
       if (isExternalUrl(fallbackRewrite)) {

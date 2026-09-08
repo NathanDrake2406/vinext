@@ -1,11 +1,20 @@
 import type { NextHeader, NextI18nConfig } from "../config/next-config.js";
 import type { RequestContext } from "../config/request-context.js";
-import { VINEXT_STATIC_FILE_HEADER } from "./headers.js";
-import { applyCdnResponseHeaders } from "./cache-control.js";
+import { isStaticFileSignal } from "./static-file-signal.js";
+import {
+  applyCdnResponseHeaders,
+  getCdnResponsePolicyHeaderNames,
+  hasExplicitNonCacheableResponsePolicy,
+  isNonCacheableCacheControl,
+  NO_STORE_CACHE_CONTROL,
+} from "./cache-control.js";
 import { VINEXT_RSC_VARY_HEADER } from "./app-rsc-cache-busting.js";
 import { mergeVaryHeader } from "./middleware-response-headers.js";
 import { hasBasePath, stripBasePath } from "../utils/base-path.js";
 import { normalizeDefaultLocalePathname } from "./pages-i18n.js";
+import { sanitizeMethodNotAllowedHeaders } from "./http-error-responses.js";
+import { hasPostConfigLinkHeaders } from "./app-response-header-provenance.js";
+import { captureRouteCacheabilityResponsePolicy } from "vinext/shims/cacheability-classification";
 
 type FinalizeAppRscResponseOptions = {
   basePath: string;
@@ -24,9 +33,66 @@ type FinalizeAppRscResponseOptions = {
    * before middleware runs.
    */
   requestContext: RequestContext;
+  /** Existing response headers that matching next.config rules may replace. */
+  overwriteExisting?: ReadonlySet<string>;
+  /** Response headers emitted by middleware after config matching. */
+  middlewareHeaders?: Headers | null;
+  /** Whether config matching should update the active cacheability classification. */
+  recordCacheability?: boolean;
 };
 
 const HAS_CONFIG_HEADERS = process.env.__VINEXT_HAS_CONFIG_HEADERS !== "false";
+const configHeadersAlreadyApplied = new WeakSet<Response>();
+
+function normalizeExplicitNonCacheablePolicy(headers: Headers): void {
+  if (!hasExplicitNonCacheableResponsePolicy(headers)) return;
+  const cacheControl = headers.get("Cache-Control");
+  applyCdnResponseHeaders(headers, {
+    cacheControl:
+      cacheControl && isNonCacheableCacheControl(cacheControl)
+        ? cacheControl
+        : NO_STORE_CACHE_CONTROL,
+  });
+}
+
+/** Mark a response whose final target pipeline has already applied config headers. */
+export function markAppRscResponseConfigHeadersApplied(response: Response): Response {
+  configHeadersAlreadyApplied.add(response);
+  return response;
+}
+
+/** Apply only the matching next.config headers for an App Router request. */
+export async function applyAppRscConfigHeaders(
+  headers: Headers,
+  request: Request,
+  options: FinalizeAppRscResponseOptions,
+): Promise<void> {
+  if (!HAS_CONFIG_HEADERS || !options.configHeaders.length) return;
+
+  const url = new URL(request.url);
+  let pathname = url.pathname;
+  const hadBasePath = !options.basePath || hasBasePath(pathname, options.basePath);
+  pathname = stripBasePath(pathname, options.basePath);
+  const matchPathname = options.i18nConfig
+    ? normalizeDefaultLocalePathname(pathname, options.i18nConfig, { hostname: url.hostname })
+    : pathname;
+
+  const { applyConfigHeadersToResponse } = await import("./config-headers.js");
+  applyConfigHeadersToResponse(headers, {
+    configHeaders: options.configHeaders,
+    pathname: matchPathname,
+    requestContext: options.requestContext,
+    basePathState: { basePath: options.basePath, hadBasePath },
+    appendToPostConfigLink: hasPostConfigLinkHeaders(headers),
+    middlewareHeaders: options.middlewareHeaders,
+    recordCacheability: options.recordCacheability,
+    // Next.js next.config headers override its renderer-owned Cache-Control,
+    // including for force-dynamic App Pages. Other response headers retain
+    // the existing merge precedence.
+    // test/e2e/app-dir/custom-cache-control/custom-cache-control.test.ts
+    overwriteExisting: options.overwriteExisting ?? getCdnResponsePolicyHeaderNames(),
+  });
+}
 
 /**
  * Apply App Router response finalization that must happen outside individual
@@ -51,7 +117,7 @@ export async function finalizeAppRscResponse(
     return response;
   }
 
-  if (!response.headers.has(VINEXT_STATIC_FILE_HEADER)) {
+  if (!isStaticFileSignal(response)) {
     const varyHeader = response.headers.get("Vary");
     if (varyHeader === null) {
       response.headers.set("Vary", VINEXT_RSC_VARY_HEADER);
@@ -66,41 +132,29 @@ export async function finalizeAppRscResponse(
   // unspecified response is never accidentally edge-cached), while the default
   // origin-managed adapter leaves it absent (unchanged behavior). This runs only
   // when Cache-Control is absent, so it never clobbers a policy a renderer
-  // already applied — including a real `CDN-Cache-Control`. Redirects are
-  // already skipped above.
+  // already applied. Redirects are already skipped above.
   if (!response.headers.has("Cache-Control")) {
     applyCdnResponseHeaders(response.headers, { cacheControl: "" });
+    // This is the adapter's fail-closed provisional policy, not an
+    // application opt-out. Admission may replace it only after the body has
+    // completed and the render has proved reusable. Capture before config
+    // headers run so any later private/no-store override still vetoes.
+    captureRouteCacheabilityResponsePolicy(response.headers);
   }
 
-  if (!HAS_CONFIG_HEADERS || !options.configHeaders.length) {
+  if (configHeadersAlreadyApplied.has(response)) {
+    normalizeExplicitNonCacheablePolicy(response.headers);
     return response;
   }
+  await applyAppRscConfigHeaders(response.headers, request, options);
+  normalizeExplicitNonCacheablePolicy(response.headers);
 
-  const url = new URL(request.url);
-  let pathname = url.pathname;
-
-  // Config header sources are defined without basePath prefix. Strip basePath
-  // at a segment boundary (not a string prefix) so /app2/page with basePath
-  // /app is not incorrectly treated as /app with suffix /2/page.
-  const hadBasePath = !options.basePath || hasBasePath(pathname, options.basePath);
-  pathname = stripBasePath(pathname, options.basePath);
-
-  // Default-locale path normalisation (issue #1336, item 4). Splice in the
-  // (domain-aware) default locale on unprefixed paths so locale-aware
-  // `has`/`missing` rules with `:locale` placeholders or `locale: false`
-  // overrides still match default-locale URLs. Mirrors the call sites in
-  // `prod-server.ts`, `deploy.ts`, and `app-rsc-handler.ts`.
-  const matchPathname = options.i18nConfig
-    ? normalizeDefaultLocalePathname(pathname, options.i18nConfig, { hostname: url.hostname })
-    : pathname;
-
-  const { applyConfigHeadersToResponse } = await import("./config-headers.js");
-  applyConfigHeadersToResponse(response.headers, {
-    configHeaders: options.configHeaders,
-    pathname: matchPathname,
-    requestContext: options.requestContext,
-    basePathState: { basePath: options.basePath, hadBasePath },
-  });
+  // Static-file 405 responses are synthesized before config headers run.
+  // Reassert their body metadata afterward so a matching headers() rule cannot
+  // describe a different body or replace the canonical Allow value.
+  if (response.status === 405 && response.headers.get("Allow") === "GET, HEAD") {
+    sanitizeMethodNotAllowedHeaders(response.headers, "GET, HEAD");
+  }
 
   return response;
 }

@@ -15,8 +15,7 @@
  *   vinext({ cache: { data: kvDataAdapter({ binding: 'VINEXT_KV_CACHE' }) } })
  *
  * The imperative `setCacheHandler` / `setDataCacheHandler` setters are
- * deprecated for consumers and retained only as the internal registration
- * target used by the generated cache-adapter module.
+ * deprecated for consumers and retained for backwards compatibility.
  */
 
 import {
@@ -33,6 +32,7 @@ import { encodeCacheTag, encodeCacheTags } from "../utils/encode-cache-tag.js";
 import { getCdnCacheAdapter } from "./cdn-cache.js";
 import { getDataCacheHandler, type CachedFetchValue } from "./cache-handler.js";
 import { getRequestExecutionContext } from "./request-context.js";
+import { isStagedCacheabilityProbeActive } from "./cacheability-classification.js";
 import {
   createCacheRevalidationContext,
   runWithRequestContext,
@@ -99,6 +99,10 @@ function scheduleRevalidation(promise: Promise<void>): undefined {
  * @param profile - cacheLife profile name (e.g. 'max', 'hours') or inline { expire: number }
  */
 export function revalidateTag(tag: string, profile?: string | { expire?: number }): undefined {
+  if (isStagedCacheabilityProbeActive()) {
+    _markDynamic();
+    return undefined;
+  }
   // Resolve the profile to durations for the handler
   let durations: { expire?: number } | undefined;
   if (typeof profile === "string") {
@@ -154,6 +158,10 @@ async function _invalidateEncodedTag(
  * layout/page hierarchy tags, so only no-type invalidation applies there.
  */
 export function revalidatePath(path: string, type?: "page" | "layout"): undefined {
+  if (isStagedCacheabilityProbeActive()) {
+    _markDynamic();
+    return undefined;
+  }
   markActionRevalidation(ACTION_DID_REVALIDATE_STATIC_AND_DYNAMIC);
   // Strip trailing slash so root "/" becomes "" — avoids double-slash in _N_T_//layout
   const stem = path.endsWith("/") ? path.slice(0, -1) : path;
@@ -468,6 +476,12 @@ export function unstable_cacheTag(...tags: string[]): void {
 // unstable_cache — the older caching API
 // ---------------------------------------------------------------------------
 
+// Version the physical namespace whenever a runtime security invariant makes
+// entries produced by an older implementation unsafe to reuse. Version 2
+// prevents results created before private-in-unstable-cache validation from
+// bypassing the new synchronous boundary check after an application upgrade.
+const UNSTABLE_CACHE_KEY_PREFIX = "unstable_cache:v2";
+
 /**
  * AsyncLocalStorage to track whether we're inside an unstable_cache() callback.
  * Stored on globalThis via Symbol so headers.ts can detect the scope without
@@ -572,7 +586,7 @@ export function unstable_cache<T extends (...args: any[]) => Promise<any>>(
 
   const cachedFn = async (...args: Parameters<T>) => {
     const argsKey = JSON.stringify(args);
-    const cacheKey = `unstable_cache:${baseKey}:${argsKey}`;
+    const cacheKey = `${UNSTABLE_CACHE_KEY_PREFIX}:${baseKey}:${argsKey}`;
     addCollectedRequestTags(tags);
     recordUnstableCacheObservation({
       kind: "unstable_cache",
@@ -603,7 +617,10 @@ export function unstable_cache<T extends (...args: any[]) => Promise<any>>(
       if (existing?.value && existing.value.kind === "FETCH") {
         const cacheReadAction = decideCacheRead(
           existing.cacheState,
-          getFunctionCacheRevalidationMode(),
+          // A cache-producing caller must not persist a stale dependency.
+          getRegisteredCacheContext() || isInsideUnstableCacheScope()
+            ? "foreground"
+            : getFunctionCacheRevalidationMode(),
         );
         if (cacheReadAction !== "revalidate") {
           const cached = tryDeserializeUnstableCacheResult(existing.value.data.body);

@@ -13,7 +13,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import fs from "node:fs";
 import path from "node:path";
-import { readPagesRouterEntrySource } from "./worker-entry-source.js";
+import { readPagesResponseStageEntrySource } from "./worker-entry-source.js";
 
 type ExecutionContextLike = {
   waitUntil(promise: Promise<unknown>): void;
@@ -141,19 +141,20 @@ describe("after() in deploy mode — Pages Router worker entry", () => {
   it("forwards ctx to handleApiRoute so api routes can call after()", () => {
     // Regression for #1365: handleApiRoute previously ignored ctx, leaving
     // after() inside Pages Router api routes without a way to call
-    // ctx.waitUntil(). The generated worker entry must thread ctx through.
-    //
-    // After #1336 item 3 the dispatch URL is `apiLookupUrl` (the locale-
-    // stripped form of `resolvedUrl`), but `ctx` is still threaded through.
-    const content = readPagesRouterEntrySource();
-    expect(content).toContain(
-      'handleApiRoute(req, apiUrl, ctx, new URL(req.url).origin, "worker")',
+    // ctx.waitUntil(). Rendering now lives in the response stage, which must
+    // preserve that context in the cacheability wrapper it passes to the
+    // generated Pages entry.
+    const content = readPagesResponseStageEntrySource();
+    expect(content).toMatch(
+      /pagesEntry\.handleApiRoute\(\s*request,\s*props\.apiUrl,\s*cacheabilityContext,\s*new URL\(request\.url\)\.origin,/,
     );
   });
 
   it("forwards ctx and staged middleware headers to renderPage so page renders can call after() and apply CSP nonces", () => {
-    const content = readPagesRouterEntrySource();
-    expect(content).toContain("renderPage(req, resolvedUrl, null, ctx, stagedHeaders, options)");
+    const content = readPagesResponseStageEntrySource();
+    expect(content).toMatch(
+      /pagesEntry\.renderPage\(\s*request,\s*props\.resolvedUrl,\s*null,\s*cacheabilityContext,\s*renderHeaders,\s*props\.renderOptions/,
+    );
   });
 });
 
@@ -196,6 +197,55 @@ describe("after() in deploy mode — Pages Router API handler", () => {
     });
 
     expect(observedCtx).toBe(ctx);
+  });
+
+  it("keeps streaming handler completion alive through the active execution context", async () => {
+    const { handlePagesApiRoute } =
+      await import("../packages/vinext/src/server/pages-api-route.js");
+    const { runWithExecutionContext } =
+      await import("../packages/vinext/src/shims/request-context.js");
+
+    const ctx = createMockCtx();
+    let releaseHandler!: () => void;
+    const handlerGate = new Promise<void>((resolve) => {
+      releaseHandler = resolve;
+    });
+    let handlerSettled = false;
+
+    // The ambient form matches the hybrid App/Pages bridge, where the App
+    // Router owns the request scope and handlePagesApiRoute receives no ctx
+    // argument of its own.
+    const response = await runWithExecutionContext(ctx, () =>
+      handlePagesApiRoute({
+        match: {
+          params: {},
+          route: {
+            pattern: "/api/test",
+            module: {
+              async default(
+                _req: unknown,
+                res: { end: (body?: string) => void; statusCode: number },
+              ) {
+                res.statusCode = 200;
+                res.end("ok");
+                await handlerGate;
+                handlerSettled = true;
+              },
+            },
+          },
+        },
+        request: new Request("https://example.test/api/test"),
+        url: "/api/test",
+      }),
+    );
+
+    await expect(response.text()).resolves.toBe("ok");
+    expect(handlerSettled).toBe(false);
+    expect(ctx.promises).toHaveLength(1);
+
+    releaseHandler();
+    await ctx.promises[0];
+    expect(handlerSettled).toBe(true);
   });
 
   it("handlePagesApiRoute works without ctx (Node dev parity)", async () => {

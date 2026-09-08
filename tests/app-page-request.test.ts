@@ -4,10 +4,15 @@ import {
   buildAppPageElement,
   resolveAppPageActionRerenderTarget,
   resolveAppPageIntercept,
-  resolveAppPageInterceptMatch,
+  resolveAppPageInterceptionRerenderTarget,
   resolveAppPageGenerateStaticParamsSources,
   validateAppPageDynamicParams,
 } from "../packages/vinext/src/server/app-page-request.js";
+import { cookies, headersContextFromRequest } from "../packages/vinext/src/shims/headers.js";
+import {
+  createRequestContext,
+  runWithRequestContext,
+} from "../packages/vinext/src/shims/unified-request-context.js";
 
 describe("app page request helpers", () => {
   it("returns 404 when dynamicParams=false receives unknown params", async () => {
@@ -676,7 +681,7 @@ describe("app page request helpers", () => {
   });
 });
 
-describe("resolveAppPageInterceptMatch", () => {
+describe("resolveAppPageInterceptionRerenderTarget intercept loading", () => {
   const sourceRoute = { params: [], pattern: "/feed" };
   const currentRoute = { params: ["id"], pattern: "/photos/[id]" };
 
@@ -690,56 +695,7 @@ describe("resolveAppPageInterceptMatch", () => {
     interceptSlotKey: intercept.slotKey,
   });
 
-  it("returns null on non-RSC requests", async () => {
-    const result = await resolveAppPageInterceptMatch({
-      cleanPathname: "/photos/123",
-      currentRoute,
-      findIntercept() {
-        throw new Error("should not look up intercepts on non-RSC requests");
-      },
-      getRouteParamNames: (route) => route.params,
-      getSourceRoute: () => sourceRoute,
-      isRscRequest: false,
-      toInterceptOpts,
-    });
-
-    expect(result).toBeNull();
-  });
-
-  it("returns null when findIntercept returns nothing", async () => {
-    const result = await resolveAppPageInterceptMatch({
-      cleanPathname: "/photos/123",
-      currentRoute,
-      findIntercept: () => null,
-      getRouteParamNames: (route) => route.params,
-      getSourceRoute: () => sourceRoute,
-      isRscRequest: true,
-      toInterceptOpts,
-    });
-
-    expect(result).toBeNull();
-  });
-
-  it("returns null when the source route is the current route", async () => {
-    const result = await resolveAppPageInterceptMatch({
-      cleanPathname: "/photos/123",
-      currentRoute,
-      findIntercept: () => ({
-        matchedParams: { id: "123" },
-        page: { default: "modal-page" },
-        slotKey: "modal@app/photos/@modal",
-        sourceRouteIndex: 0,
-      }),
-      getRouteParamNames: (route) => route.params,
-      getSourceRoute: () => currentRoute,
-      isRscRequest: true,
-      toInterceptOpts,
-    });
-
-    expect(result).toBeNull();
-  });
-
-  it("returns sourceRoute, sourceParams, matchedParams, and interceptOpts when an intercept applies", async () => {
+  it("returns the source route, params, navigation params, and intercept options", async () => {
     const matchedParams = { id: "123" };
     const intercept = {
       matchedParams,
@@ -748,8 +704,9 @@ describe("resolveAppPageInterceptMatch", () => {
       sourceRouteIndex: 0,
     };
 
-    const result = await resolveAppPageInterceptMatch({
+    const result = await resolveAppPageInterceptionRerenderTarget({
       cleanPathname: "/photos/123",
+      currentParams: matchedParams,
       currentRoute,
       findIntercept: () => intercept,
       getRouteParamNames: (route) => route.params,
@@ -758,13 +715,12 @@ describe("resolveAppPageInterceptMatch", () => {
       toInterceptOpts,
     });
 
-    expect(result).not.toBeNull();
-    expect(result?.sourceRoute).toBe(sourceRoute);
-    expect(result?.matchedParams).toBe(matchedParams);
+    expect(result.route).toBe(sourceRoute);
+    expect(result.navigationParams).toEqual(matchedParams);
     // sourceParams keeps only the params declared by the source route.
     // /feed has no dynamic params, so the slice is empty.
-    expect(result?.sourceParams).toEqual({});
-    expect(result?.interceptOpts).toEqual(toInterceptOpts(intercept));
+    expect(result.params).toEqual({});
+    expect(result.interceptOpts).toEqual(toInterceptOpts(intercept));
   });
 
   it("deduplicates concurrent intercept page and layout loads", async () => {
@@ -789,6 +745,7 @@ describe("resolveAppPageInterceptMatch", () => {
     };
     const options = {
       cleanPathname: "/photos/123",
+      currentParams: { id: "123" },
       currentRoute,
       findIntercept: () => ({ ...intercept, page: sharedLoadState.page }),
       getRouteParamNames: (route: { params: string[] }) => route.params,
@@ -798,8 +755,8 @@ describe("resolveAppPageInterceptMatch", () => {
     };
 
     await Promise.all([
-      resolveAppPageInterceptMatch(options),
-      resolveAppPageInterceptMatch(options),
+      resolveAppPageInterceptionRerenderTarget(options),
+      resolveAppPageInterceptionRerenderTarget(options),
     ]);
 
     expect(__pageLoader).toHaveBeenCalledTimes(1);
@@ -808,12 +765,66 @@ describe("resolveAppPageInterceptMatch", () => {
     expect(intercept.interceptLayouts).toEqual([interceptLayout]);
   });
 
+  it("evaluates intercept page and not-found modules outside the request context", async () => {
+    // Intercept modules are cached on the intercept for the isolate's lifetime
+    // just like route modules, so the first navigation that matches an
+    // intercept must not be able to leak into their module scope.
+    const reads: Record<string, string> = {};
+    const readCookieAtModuleScope = (label: string) => async () => {
+      reads[label] = await cookies().then(
+        (jar) => `read:${jar.get("session")?.value ?? "none"}`,
+        () => "rejected-no-request-context",
+      );
+      return { default: label };
+    };
+    const intercept = {
+      interceptLayouts: [null],
+      __loadInterceptLayouts: [readCookieAtModuleScope("layout")],
+      matchedParams: { id: "123" },
+      page: null,
+      __pageLoader: readCookieAtModuleScope("page"),
+      notFound: null,
+      __loadNotFound: readCookieAtModuleScope("notFound"),
+      slotKey: "modal@app/feed/@modal",
+      sourceRouteIndex: 0,
+    };
+    const request = new Request("https://example.com/photos/123", {
+      headers: { cookie: "session=victim-secret" },
+    });
+    const requestContext = createRequestContext({
+      headersContext: headersContextFromRequest(request),
+    });
+
+    const liveCookie = await runWithRequestContext(requestContext, async () => {
+      const live = (await cookies()).get("session")?.value;
+      await resolveAppPageInterceptionRerenderTarget({
+        cleanPathname: "/photos/123",
+        currentParams: { id: "123" },
+        currentRoute,
+        findIntercept: () => intercept,
+        getRouteParamNames: (route: { params: string[] }) => route.params,
+        getSourceRoute: () => sourceRoute,
+        isRscRequest: true,
+        toInterceptOpts,
+      });
+      return live;
+    });
+
+    expect(liveCookie).toBe("victim-secret");
+    expect(reads).toEqual({
+      page: "rejected-no-request-context",
+      notFound: "rejected-no-request-context",
+      layout: "rejected-no-request-context",
+    });
+  });
+
   it("slices source params down to the source route's declared params", async () => {
     const categorySourceRoute = { params: ["category"], pattern: "/feed/[category]" };
     const matchedParams = { category: "nature", id: "123" };
 
-    const result = await resolveAppPageInterceptMatch({
+    const result = await resolveAppPageInterceptionRerenderTarget({
       cleanPathname: "/photos/123",
+      currentParams: matchedParams,
       currentRoute,
       findIntercept: () => ({
         matchedParams,
@@ -828,8 +839,8 @@ describe("resolveAppPageInterceptMatch", () => {
       toInterceptOpts,
     });
 
-    expect(result?.sourceParams).toEqual({ category: "nature" });
-    expect(result?.matchedParams).toEqual({ category: "nature", id: "123" });
+    expect(result.params).toEqual({ category: "nature" });
+    expect(result.navigationParams).toEqual({ category: "nature", tab: "recent", id: "123" });
   });
 });
 

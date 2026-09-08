@@ -107,6 +107,54 @@ describe("renderPagesFallback", () => {
     return { encodedBody, observedRuntimes, response };
   }
 
+  it("passes staged response headers to Pages API and GSSP user code", async () => {
+    // Ported from Next.js:
+    // test/e2e/middleware-custom-matchers/app/pages/index.js
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/middleware-custom-matchers/app/pages/index.js
+    const initialResponseHeaders = new Headers({
+      "x-config-variant": "preview",
+      "x-from-middleware": "present",
+    });
+    const apiRequest = new Request("http://localhost/api/headers");
+    const handleApiRoute = vi.fn<NonNullable<PagesEntry["handleApiRoute"]>>(
+      (_request, _url, _ctx, _origin, _runtime, headers) => {
+        expect(headers).toEqual(initialResponseHeaders);
+        return new Response("api");
+      },
+    );
+    await renderPagesFallback(
+      {
+        initialResponseHeaders,
+        isRscRequest: false,
+        middlewareContext: { headers: null, requestHeaders: null, status: null },
+        request: apiRequest,
+        url: new URL(apiRequest.url),
+      },
+      { ...defaultDeps, loadPagesEntry: () => ({ handleApiRoute }) },
+    );
+
+    const pageRequest = new Request("http://localhost/page");
+    const renderPage = vi.fn<NonNullable<PagesEntry["renderPage"]>>(
+      (_request, _url, _query, _parsedUrl, _middlewareHeaders, _options, headers) => {
+        expect(headers).toEqual(initialResponseHeaders);
+        return new Response("page");
+      },
+    );
+    await renderPagesFallback(
+      {
+        initialResponseHeaders,
+        isRscRequest: false,
+        middlewareContext: { headers: null, requestHeaders: null, status: null },
+        request: pageRequest,
+        url: new URL(pageRequest.url),
+      },
+      { ...defaultDeps, loadPagesEntry: () => ({ renderPage }) },
+    );
+
+    expect(handleApiRoute).toHaveBeenCalledOnce();
+    expect(renderPage).toHaveBeenCalledOnce();
+  });
+
   it("returns null for RSC requests and does not call the Pages loader", async () => {
     const loadPagesEntry = vi.fn(() => ({}) as PagesEntry);
     const res = await renderPagesFallback(
@@ -295,6 +343,93 @@ describe("renderPagesFallback", () => {
     expect(renderedHeader).toBe("injected");
     expect(renderedCf).toBe(cf);
   });
+
+  it("applies middleware response headers to Pages data renders", async () => {
+    const renderPage = vi.fn(
+      () =>
+        new Response('{"pageProps":{"ok":true}}', {
+          headers: [
+            ["cache-control", "private, no-cache, no-store, max-age=0, must-revalidate"],
+            ["content-length", "25"],
+            ["content-type", "application/json"],
+            ["set-cookie", "session=fresh; Path=/"],
+          ],
+        }),
+    );
+    const request = new Request("http://localhost/pages-dir/search");
+
+    const response = await renderPagesFallback(
+      {
+        isDataRequest: true,
+        isRscRequest: false,
+        middlewareContext: {
+          headers: new Headers([
+            ["cache-control", "public, max-age=3600"],
+            ["content-length", "999"],
+            ["set-cookie", "session=stale; Path=/"],
+            ["x-middleware-response", "present"],
+          ]),
+          requestHeaders: null,
+          status: null,
+        },
+        request,
+        url: new URL(request.url),
+      },
+      {
+        ...defaultDeps,
+        loadPagesEntry: () => ({ renderPage }),
+      },
+    );
+
+    expect(response?.headers.get("x-middleware-response")).toBe("present");
+    expect(response?.headers.get("cache-control")).toBe(
+      "private, no-cache, no-store, max-age=0, must-revalidate",
+    );
+    expect(response?.headers.get("content-length")).toBe("25");
+    expect(response?.headers.getSetCookie()).toEqual([
+      "session=stale; Path=/",
+      "session=fresh; Path=/",
+    ]);
+  });
+
+  it.each([204, 205, 304])(
+    "drops the Pages response body when middleware overrides its status to %s",
+    async (status) => {
+      const renderPage = vi.fn(
+        () =>
+          new Response("page body", {
+            headers: {
+              "content-encoding": "gzip",
+              "content-length": "9",
+              "content-type": "text/plain",
+              "transfer-encoding": "chunked",
+            },
+          }),
+      );
+      const request = new Request("http://localhost/pages-dir/search");
+
+      const response = await renderPagesFallback(
+        {
+          isDataRequest: true,
+          isRscRequest: false,
+          middlewareContext: { headers: null, requestHeaders: null, status },
+          request,
+          url: new URL(request.url),
+        },
+        {
+          ...defaultDeps,
+          loadPagesEntry: () => ({ renderPage }),
+        },
+      );
+
+      expect(response?.status).toBe(status);
+      expect(await response?.text()).toBe("");
+      expect(response?.headers.get("content-encoding")).toBeNull();
+      expect(response?.headers.get("content-length")).toBeNull();
+      expect(response?.headers.get("content-type")).toBeNull();
+      expect(response?.headers.get("transfer-encoding")).toBeNull();
+    },
+  );
 
   it("matches rewritten Pages data requests against the rewritten destination", async () => {
     const matchPageRoute = vi.fn(() => ({

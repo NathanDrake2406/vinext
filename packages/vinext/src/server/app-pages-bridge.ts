@@ -1,8 +1,10 @@
 import type { AppMiddlewareContext } from "./app-middleware.js";
 import type { EdgeApiExecutionRuntime } from "./edge-api-runtime.js";
+import { beginRouteCacheability } from "vinext/shims/cacheability-classification";
 import { getRequestExecutionContext } from "vinext/shims/request-context";
 import { pagesRouteHasPriorityOverAppRoute } from "./hybrid-route-priority.js";
 import { cloneRequestWithHeaders, cloneRequestWithUrl } from "./request-pipeline.js";
+import { mergeHeaders } from "./worker-utils.js";
 
 export type PagesEntry = {
   handleApiRoute?: (
@@ -11,6 +13,7 @@ export type PagesEntry = {
     ctx: unknown,
     trustedRevalidateOrigin: string | undefined,
     edgeRuntime: EdgeApiExecutionRuntime,
+    initialResponseHeaders?: Headers,
   ) => Promise<Response> | Response;
   matchApiRoute?: (url: string, request: Request) => PagesRouteMatch | null;
   matchPageRoute?: (url: string, request: Request) => PagesRouteMatch | null;
@@ -21,6 +24,7 @@ export type PagesEntry = {
     parsedUrl: unknown,
     middlewareRequestHeaders?: Headers | null,
     options?: { isDataReq?: boolean },
+    initialResponseHeaders?: Headers,
   ) => Promise<Response> | Response;
 };
 
@@ -72,6 +76,7 @@ type RenderPagesFallbackOptions = {
   appRouteMatch?: AppRouteMatch | null;
   isDataRequest?: boolean;
   isRscRequest: boolean;
+  initialResponseHeaders?: Headers;
   matchKind?: "dynamic" | "static";
   middlewareContext: AppMiddlewareContext;
   pathname?: string;
@@ -79,6 +84,30 @@ type RenderPagesFallbackOptions = {
   request: Request;
   url: URL;
 };
+
+function applyPagesMiddlewareContext(
+  response: Response,
+  middlewareContext: AppMiddlewareContext,
+): Response {
+  if (!middlewareContext.headers && middlewareContext.status === null) {
+    return response;
+  }
+
+  const middlewareHeaders: Record<string, string | string[]> = {};
+  if (middlewareContext.headers) {
+    for (const [key, value] of middlewareContext.headers) {
+      if (key.toLowerCase() !== "set-cookie") {
+        middlewareHeaders[key] = value;
+      }
+    }
+    const cookies = middlewareContext.headers.getSetCookie();
+    if (cookies.length > 0) {
+      middlewareHeaders["set-cookie"] = cookies;
+    }
+  }
+
+  return mergeHeaders(response, middlewareHeaders, middlewareContext.status ?? undefined);
+}
 
 /**
  * Fallback handler to route App Router requests to the Pages Router when no App Router route matches.
@@ -92,6 +121,7 @@ export async function renderPagesFallback(
     appRouteMatch = null,
     isDataRequest = false,
     isRscRequest,
+    initialResponseHeaders,
     matchKind,
     middlewareContext,
     pathname = options.url.pathname,
@@ -142,13 +172,16 @@ export async function renderPagesFallback(
       }
     }
     const executionContext = getRequestExecutionContext();
-    const pagesApiResponse = await pagesEntry.handleApiRoute(
+    const apiArgs = [
       pagesRequest,
       pagesUrl,
       undefined,
       executionContext?.trustedRevalidateOrigin ?? new URL(pagesRequest.url).origin,
       executionContext?.hostRuntime ?? "node",
-    );
+    ] as const;
+    const pagesApiResponse = await (initialResponseHeaders
+      ? pagesEntry.handleApiRoute(...apiArgs, initialResponseHeaders)
+      : pagesEntry.handleApiRoute(...apiArgs));
     const draftCookie = getDraftModeCookieHeader();
     return applyDraftModeCookie(
       applyRouteHandlerMiddlewareContext(pagesApiResponse, middlewareContext),
@@ -170,27 +203,34 @@ export async function renderPagesFallback(
   ) {
     return null;
   }
+  if (pageMatch !== null) {
+    // The bridge runs in the App request environment, while the Pages renderer
+    // can use a separate module graph. Register ownership here so the outer
+    // admission finalizer can apply the Pages manifest decision.
+    beginRouteCacheability("pages-page", pageMatch.route.pattern);
+  }
   const renderRequest = pagesDataRequest
     ? cloneRequestWithUrl(pagesRequest, pagesDataRequest.url)
     : pagesRequest;
+  const renderArgs = [
+    renderRequest,
+    pagesUrl,
+    {},
+    undefined,
+    middlewareContext.requestHeaders,
+  ] as const;
   const pagesRes = isDataRequest
-    ? await pagesEntry.renderPage(
-        renderRequest,
-        pagesUrl,
-        {},
-        undefined,
-        middlewareContext.requestHeaders,
-        { isDataReq: true },
-      )
-    : await pagesEntry.renderPage(
-        renderRequest,
-        pagesUrl,
-        {},
-        undefined,
-        middlewareContext.requestHeaders,
-      );
+    ? await (initialResponseHeaders
+        ? pagesEntry.renderPage(...renderArgs, { isDataReq: true }, initialResponseHeaders)
+        : pagesEntry.renderPage(...renderArgs, { isDataReq: true }))
+    : await (initialResponseHeaders
+        ? pagesEntry.renderPage(...renderArgs, undefined, initialResponseHeaders)
+        : pagesEntry.renderPage(...renderArgs));
   if (pagesRes.status === 404 && pageMatch === null) return null;
-  return applyDraftModeCookie(pagesRes, getDraftModeCookieHeader());
+  return applyDraftModeCookie(
+    applyPagesMiddlewareContext(pagesRes, middlewareContext),
+    getDraftModeCookieHeader(),
+  );
 }
 
 /**

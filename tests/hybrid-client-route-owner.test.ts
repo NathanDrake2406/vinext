@@ -22,7 +22,10 @@ import type {
   VinextLinkPrefetchRoute,
   VinextPagesLinkPrefetchRoute,
 } from "../packages/vinext/src/client/vinext-next-data.js";
-import type { NextRewrite } from "../packages/vinext/src/config/next-config.js";
+import {
+  toClientRewrites,
+  type ClientRewrites,
+} from "../packages/vinext/src/client/client-rewrites.js";
 import {
   resolveHybridClientRewriteHref,
   resolveHybridClientRouteOwner,
@@ -32,18 +35,16 @@ const APP_BASE = "http://localhost/";
 
 type WindowState = {
   app: VinextLinkPrefetchRoute[];
+  locales?: string[];
   pages: VinextPagesLinkPrefetchRoute[];
-  rewrites?: {
-    afterFiles: NextRewrite[];
-    beforeFiles: NextRewrite[];
-    fallback: NextRewrite[];
-  };
+  rewrites?: ClientRewrites;
 };
 
-function installWindow({ app, pages, rewrites }: WindowState): void {
+function installWindow({ app, locales, pages, rewrites }: WindowState): void {
   (globalThis as any).window = {
     location: { href: APP_BASE, origin: "http://localhost" },
     __VINEXT_LINK_PREFETCH_ROUTES__: app,
+    __VINEXT_LOCALES__: locales,
     __VINEXT_PAGES_LINK_PREFETCH_ROUTES__: pages,
     __VINEXT_CLIENT_REWRITES__: rewrites,
   };
@@ -124,6 +125,30 @@ describe("resolveHybridClientRouteOwner", () => {
     expect(resolveHybridClientRouteOwner("/api/test", "")).toBe("document");
   });
 
+  it("keeps locale-prefixed App pages distinct from unprefixed Pages API routes", () => {
+    // Next.js treats /fr/api/* as a localized page path, not a Pages API path:
+    // test/e2e/i18n-api-support/index.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/i18n-api-support/index.test.ts
+    installWindow({
+      app: [appRoute([":locale", "api", "status"])],
+      locales: ["en", "fr"],
+      pages: [{ ...pagesRoute(["api", "status"], false), documentOnly: true }],
+    });
+
+    expect(resolveHybridClientRouteOwner("/fr/api/status", "")).toBe("app");
+    expect(resolveHybridClientRouteOwner("/api/status", "")).toBe("document");
+  });
+
+  it("still locale-normalizes Pages page matching", () => {
+    installWindow({
+      app: [appRoute([":locale", "dashboard"])],
+      locales: ["en", "fr"],
+      pages: [pagesRoute(["about"], false)],
+    });
+
+    expect(resolveHybridClientRouteOwner("/fr/about", "")).toBe("pages");
+  });
+
   it("applies document ownership only after choosing the most specific route", () => {
     installWindow({
       app: [appRoute(["api", "settings"], false)],
@@ -132,10 +157,10 @@ describe("resolveHybridClientRouteOwner", () => {
     expect(resolveHybridClientRouteOwner("/api/settings", "")).toBe("app");
 
     installWindow({
-      app: [documentRoute(["api", ":slug"])],
-      pages: [pagesRoute(["api", "settings"], false)],
+      app: [documentRoute(["docs", ":slug"])],
+      pages: [pagesRoute(["docs", "settings"], false)],
     });
-    expect(resolveHybridClientRouteOwner("/api/settings", "")).toBe("pages");
+    expect(resolveHybridClientRouteOwner("/docs/settings", "")).toBe("pages");
   });
 
   it.each(["beforeFiles", "afterFiles", "fallback"] as const)(
@@ -163,6 +188,26 @@ describe("resolveHybridClientRouteOwner", () => {
       expect(resolveHybridClientRouteOwner("/source", "")).toBe("app");
     },
   );
+
+  it("matches locale-aware rewrites against the raw App pathname", () => {
+    installWindow({
+      app: [appRoute([":locale", "app-destination"])],
+      locales: ["en", "fr"],
+      pages: [],
+      rewrites: {
+        afterFiles: [],
+        beforeFiles: [
+          {
+            source: "/:nextInternalLocale(en|fr)/source",
+            destination: "/:nextInternalLocale/app-destination",
+          },
+        ],
+        fallback: [],
+      },
+    });
+
+    expect(resolveHybridClientRouteOwner("/fr/source", "")).toBe("app");
+  });
 
   it.each(["beforeFiles", "afterFiles", "fallback"] as const)(
     "returns the %s rewrite destination href",
@@ -209,6 +254,58 @@ describe("resolveHybridClientRouteOwner", () => {
 
     expect(resolveHybridClientRouteOwner("/source", "")).toBeNull();
     expect(resolveHybridClientRouteOwner("/source?preview=1", "")).toBe("app");
+  });
+
+  it("hands rewrites with browser-invisible conditions back to the document request", () => {
+    installWindow({
+      app: [appRoute(["app-destination"], false)],
+      pages: [],
+      rewrites: toClientRewrites({
+        afterFiles: [],
+        beforeFiles: [
+          {
+            source: "/cookie-source",
+            destination: "/app-destination",
+            has: [{ type: "cookie", key: "internal-access", value: "cookie-secret" }],
+          },
+          {
+            source: "/header-source",
+            destination: "/app-destination",
+            has: [{ type: "header", key: "x-origin-auth", value: "header-secret" }],
+          },
+        ],
+        fallback: [],
+      }),
+    });
+
+    expect(resolveHybridClientRewriteHref("/cookie-source", "")).toBeNull();
+    expect(resolveHybridClientRouteOwner("/cookie-source", "")).toBe("document");
+    expect(resolveHybridClientRewriteHref("/header-source", "")).toBeNull();
+    expect(resolveHybridClientRouteOwner("/header-source", "")).toBe("document");
+  });
+
+  it("uses browser-authoritative conditions as a server handoff prefilter", () => {
+    installWindow({
+      app: [appRoute(["app-destination"], false)],
+      pages: [],
+      rewrites: toClientRewrites({
+        afterFiles: [],
+        beforeFiles: [
+          {
+            source: "/source",
+            destination: "/app-destination",
+            has: [
+              { type: "query", key: "preview", value: "1" },
+              { type: "cookie", key: "internal-access", value: "cookie-secret" },
+            ],
+          },
+        ],
+        fallback: [],
+      }),
+    });
+
+    expect(resolveHybridClientRouteOwner("/source", "")).toBeNull();
+    expect(resolveHybridClientRouteOwner("/source?preview=1", "")).toBe("document");
   });
 
   it("applies every beforeFiles rewrite before choosing ownership", () => {

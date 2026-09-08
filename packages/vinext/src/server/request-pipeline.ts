@@ -1,15 +1,17 @@
 import { hasBasePath, stripBasePath, removeTrailingSlash } from "../utils/base-path.js";
-import {
-  INTERNAL_HEADERS,
-  MIDDLEWARE_HEADER_PREFIX,
-  VINEXT_INTERNAL_HEADERS,
-  VINEXT_STATIC_FILE_HEADER,
-} from "./headers.js";
+import { INTERNAL_HEADERS, MIDDLEWARE_HEADER_PREFIX, VINEXT_INTERNAL_HEADERS } from "./headers.js";
 import { MIDDLEWARE_CACHE_HEADER } from "../utils/protocol-headers.js";
-import { forbiddenResponse, notFoundResponse } from "./http-error-responses.js";
+import { getUnconsumedMiddlewareRequestHeaders } from "../utils/middleware-request-headers.js";
+import {
+  forbiddenResponse,
+  methodNotAllowedResponse,
+  notFoundResponse,
+} from "./http-error-responses.js";
 import { isOpenRedirectShaped } from "./open-redirect.js";
+import { createStaticFileSignal, type StaticFileSignalContext } from "./static-file-signal.js";
 
 export { isOpenRedirectShaped } from "./open-redirect.js";
+export { createStaticFileSignal };
 
 const PATHNAME_CANONICALIZATION_BASE = new URL("http://vinext.invalid/");
 
@@ -97,11 +99,6 @@ export { hasBasePath, stripBasePath };
 
 export type HeaderRecord = Record<string, string | string[]>;
 
-type StaticFileSignalContext = {
-  headers: Headers | null;
-  status: number | null;
-};
-
 type ResolvePublicFileRouteOptions = {
   cleanPathname: string;
   middlewareContext: StaticFileSignalContext;
@@ -116,35 +113,22 @@ function isWellKnownPathname(pathname: string): boolean {
   return pathname === "/.well-known" || pathname.startsWith("/.well-known/");
 }
 
-export function createStaticFileSignal(
-  pathname: string,
-  context: StaticFileSignalContext,
-): Response {
-  const headers = new Headers({
-    [VINEXT_STATIC_FILE_HEADER]: encodeURIComponent(pathname),
-  });
-  if (context.headers) {
-    for (const [key, value] of context.headers) {
-      headers.append(key, value);
-    }
-  }
-  return new Response(null, {
-    status: context.status ?? 200,
-    headers,
-  });
-}
-
 /**
  * Resolve the public/ filesystem-route slot in the Next.js routing order.
  *
  * Public files are checked after middleware and before afterFiles/fallback
  * rewrites. The generated App Router entry provides the public-file set; this
- * helper owns the request-method and RSC exclusions plus static-file signaling.
+ * helper owns the RSC exclusion, existence-first method enforcement, and
+ * static-file signaling. Missing mutation targets continue through routing.
  */
 export function resolvePublicFileRoute(options: ResolvePublicFileRouteOptions): Response | null {
-  if (options.request.method !== "GET" && options.request.method !== "HEAD") return null;
   if (options.pathname.endsWith(".rsc")) return null;
   if (!options.publicFiles.has(options.cleanPathname)) return null;
+  if (options.request.method !== "GET" && options.request.method !== "HEAD") {
+    return methodNotAllowedResponse("GET, HEAD", {
+      headers: options.middlewareContext.headers ?? undefined,
+    });
+  }
   return createStaticFileSignal(options.cleanPathname, options.middlewareContext);
 }
 
@@ -466,15 +450,22 @@ export function isOriginAllowed(origin: string, allowed: string[]): boolean {
  *
  * Middleware uses `x-middleware-*` headers as internal signals (e.g.
  * `x-middleware-next`, `x-middleware-rewrite`, `x-middleware-request-*`).
- * These must be removed before sending the response to the client.
+ * Consumed protocol headers must be removed before sending the response to the
+ * client. Next.js exposes truthy unconsumed `x-middleware-request-*` values as
+ * literal request and response headers, so those are intentionally preserved.
  *
  * @param headers - The Headers object to modify in place
  */
 export function processMiddlewareHeaders(headers: Headers): void {
   const keysToDelete: string[] = [];
+  const unconsumedRequestHeaders = getUnconsumedMiddlewareRequestHeaders(headers);
 
   for (const key of headers.keys()) {
-    if (key.startsWith(MIDDLEWARE_HEADER_PREFIX) && key !== MIDDLEWARE_CACHE_HEADER) {
+    if (
+      key.startsWith(MIDDLEWARE_HEADER_PREFIX) &&
+      key !== MIDDLEWARE_CACHE_HEADER &&
+      !unconsumedRequestHeaders.has(key)
+    ) {
       keysToDelete.push(key);
     }
   }
@@ -528,6 +519,29 @@ function getRequestCf(request: Request): unknown {
 }
 
 /**
+ * Re-attach the Workers-specific `cf` metadata from `source` onto a rebuilt
+ * Request. `new Request()` never copies it, and middleware/authorization code
+ * can key off `request.cf` (geo checks, bot scores), so every reconstruction
+ * must restore it explicitly.
+ */
+export function attachRequestCfMetadata(target: Request, source: Request): Request {
+  const ownDescriptor = Object.getOwnPropertyDescriptor(source, "cf");
+  if (ownDescriptor) {
+    Object.defineProperty(target, "cf", ownDescriptor);
+    return target;
+  }
+  const cf = getRequestCf(source);
+  if (cf !== undefined) {
+    Object.defineProperty(target, "cf", {
+      value: cf,
+      enumerable: true,
+      configurable: true,
+    });
+  }
+  return target;
+}
+
+/**
  * Clone a Request while overriding headers, preserving metadata when possible.
  *
  * Some runtimes (Workers) allow `new Request(request, { headers })` which
@@ -550,6 +564,8 @@ export function cloneRequestWithHeaders(request: Request, headers: Headers): Req
       cache: request.cache,
       mode: request.mode,
       credentials: request.credentials,
+      // Undici rejects keepalive with an exposed ReadableStream body.
+      keepalive: request.body === null && request.keepalive,
       referrer: request.referrer,
       referrerPolicy: request.referrerPolicy,
     };
@@ -559,16 +575,7 @@ export function cloneRequestWithHeaders(request: Request, headers: Headers): Req
     }
     cloned = new Request(request.url, init);
   }
-  const cf = getRequestCf(request);
-  if (cf !== undefined) {
-    // new Request() does not copy Workers-specific cf, so re-attach it.
-    Object.defineProperty(cloned, "cf", {
-      value: cf,
-      enumerable: true,
-      configurable: true,
-    });
-  }
-  return cloned;
+  return attachRequestCfMetadata(cloned, request);
 }
 
 /**
@@ -598,6 +605,8 @@ export function cloneRequestWithUrl(request: Request, url: string): Request {
       cache: request.cache,
       mode: request.mode,
       credentials: request.credentials,
+      // Undici rejects keepalive with an exposed ReadableStream body.
+      keepalive: request.body === null && request.keepalive,
       referrer: request.referrer,
       referrerPolicy: request.referrerPolicy,
     };
@@ -607,14 +616,5 @@ export function cloneRequestWithUrl(request: Request, url: string): Request {
     }
     cloned = new Request(url, init);
   }
-  const cf = getRequestCf(request);
-  if (cf !== undefined) {
-    // new Request() does not copy Workers-specific cf, so re-attach it.
-    Object.defineProperty(cloned, "cf", {
-      value: cf,
-      enumerable: true,
-      configurable: true,
-    });
-  }
-  return cloned;
+  return attachRequestCfMetadata(cloned, request);
 }

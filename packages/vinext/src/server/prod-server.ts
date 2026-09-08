@@ -18,6 +18,8 @@
  * - dist/server/ssr/index.js — SSR entry (imported by RSC entry at runtime)
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createRequire } from "node:module";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { Readable, pipeline } from "node:stream";
 import { pathToFileURL } from "node:url";
 import fs from "node:fs";
@@ -47,11 +49,12 @@ import {
   type PagesPipelineDeps,
   type PagesRenderOptions,
 } from "./pages-request-pipeline.js";
-import { mergeHeaders } from "./worker-utils.js";
+import { finalizeMissingStaticAssetResponse, mergeHeaders } from "./worker-utils.js";
 import {
   normalizeNextDataPagePathname,
   isNextDataPathname,
   parseNextDataPathname,
+  shouldAddTrailingSlashToPagesDataPath,
   buildNextDataNotFoundResponse,
   encodeUrlParserIgnoredCharacters,
   urlParserCreatesPagesDataPath,
@@ -71,9 +74,9 @@ import { collectInlineCssManifest } from "../build/inline-css.js";
 import { readPrerenderSecret } from "../build/server-manifest.js";
 import {
   VINEXT_PRERENDER_ROUTE_PARAMS_HEADER,
+  VINEXT_PRERENDER_RENDER_ERROR_HEADER,
   VINEXT_PRERENDER_SECRET_HEADER,
   VINEXT_PRERENDER_SPECULATIVE_HEADER,
-  VINEXT_STATIC_FILE_HEADER,
 } from "./headers.js";
 import {
   readTrustedPrerenderRouteParamsFromHeaders,
@@ -97,6 +100,7 @@ import { evaluateStaticPreconditions } from "./http-conditional.js";
 import { parseHttpDate } from "./http-date.js";
 import type { NextI18nConfig } from "../config/next-config.js";
 import { readTrustedRevalidationHostname } from "./revalidation-host.js";
+import { readStaticFileSignal } from "./static-file-signal.js";
 
 /**
  * mtime of the build each bare (query-less) server-entry URL was first
@@ -172,9 +176,54 @@ export function rememberCurrentServerEntryImportMtime(entryPath: string): void {
   bareServerEntryMtimes.set(href, mtime);
 }
 
+type ServerEntryRequire = ReturnType<typeof createRequire>;
+
+const serverEntryRequireStorage = new AsyncLocalStorage<ServerEntryRequire>();
+const inheritedGlobalRequire =
+  typeof globalThis.require === "function" ? globalThis.require : undefined;
+
+function activeServerEntryRequire(): ServerEntryRequire {
+  const activeRequire = serverEntryRequireStorage.getStore() ?? inheritedGlobalRequire;
+  if (activeRequire) return activeRequire;
+  throw new Error("require() was called outside a Node production server entry context");
+}
+
+const serverEntryRequireDispatcher = new Proxy(
+  ((request: string) => activeServerEntryRequire()(request)) as ServerEntryRequire,
+  {
+    apply(_target, thisArg, argumentsList) {
+      return Reflect.apply(activeServerEntryRequire(), thisArg, argumentsList);
+    },
+    get(_target, property) {
+      return Reflect.get(activeServerEntryRequire(), property);
+    },
+    set(_target, property, value) {
+      return Reflect.set(activeServerEntryRequire(), property, value);
+    },
+  },
+);
+
+function runWithServerEntryRequire<T>(entryRequire: ServerEntryRequire, callback: () => T): T {
+  // Keep one process-global dispatcher installed for the lifetime of the Node
+  // adapter. The resolver itself is entry-scoped through AsyncLocalStorage;
+  // calls made by the embedding outside an entry context use the inherited
+  // resolver captured above, or intentionally throw the adapter-specific
+  // error from activeServerEntryRequire when no resolver existed.
+  globalThis.require = serverEntryRequireDispatcher;
+  return serverEntryRequireStorage.run(entryRequire, callback);
+}
+
+function createServerEntryRequire(entryPath: string): ServerEntryRequire {
+  return createRequire(pathToFileURL(entryPath));
+}
+
 // oxlint-disable-next-line typescript/no-explicit-any -- built entry modules are untyped, matching the previous inline `await import(...)`
 export async function importServerEntryModule(entryPath: string): Promise<any> {
-  return import(resolveServerEntryImportUrl(entryPath));
+  const entryRequire = createServerEntryRequire(entryPath);
+  return runWithServerEntryRequire(
+    entryRequire,
+    () => import(resolveServerEntryImportUrl(entryPath)),
+  );
 }
 
 /** Convert a Node.js IncomingMessage into a ReadableStream for Web Request body. */
@@ -229,6 +278,8 @@ export type ProdServerOptions = {
   outDir?: string;
   /** Explicit App Router RSC entry path. Defaults to `<outDir>/server/index.js`. */
   rscEntryPath?: string;
+  /** Directory containing server manifests, sidecars, and prerender artifacts. */
+  serverDir?: string;
   /** Explicit Pages Router server entry path. Defaults to `<outDir>/server/entry.js`. */
   serverEntryPath?: string;
   /** Disable compression (default: false) */
@@ -366,14 +417,13 @@ function nodeHeadersToWebHeaders(headersRecord: IncomingMessage["headers"]): Hea
 const NO_BODY_RESPONSE_STATUSES = new Set([204, 205, 304]);
 
 // Constant header-name sets for `omitHeadersCaseInsensitive`. Hoisted to module
-// scope so the `.map().toLowerCase()` + `Set` allocation happens once at module
-// load instead of per response. All entries must be lowercase; the static-file
-// header constant is already `x-vinext-static-file`.
+// scope so the Set allocation happens once at module load instead of per response.
+// All entries must be lowercase.
 const OMIT_BODY_HEADERS: ReadonlySet<string> = new Set(["content-length", "content-type"]);
 const OMIT_STATIC_RESPONSE_HEADERS: ReadonlySet<string> = new Set([
-  VINEXT_STATIC_FILE_HEADER,
   "content-encoding",
   "content-length",
+  "content-range",
   "content-type",
 ]);
 
@@ -413,6 +463,15 @@ function mergeVaryHeader(
   return merged;
 }
 
+const OMIT_METHOD_NOT_ALLOWED_HEADERS: ReadonlySet<string> = new Set([
+  "allow",
+  "content-encoding",
+  "content-length",
+  "content-range",
+  "content-type",
+  "transfer-encoding",
+]);
+
 function installClientBuildManifestGlobals(
   clientDir: string,
   assetBase: string,
@@ -439,10 +498,19 @@ function cancelResponseBody(response: Response): void {
 
 type ResponseWithVinextStreamingMetadata = Response & {
   __vinextStreamedHtmlResponse?: boolean;
+  __vinextStreamedApiResponse?: boolean;
 };
 
 function isVinextStreamedHtmlResponse(response: Response): boolean {
   return (response as ResponseWithVinextStreamingMetadata).__vinextStreamedHtmlResponse === true;
+}
+
+// Set by the Pages API bridge (pages-node-compat.ts) when the Response was
+// resolved while the handler was still writing (streaming/piping). Buffering
+// such a body would defer delivery until the source closes and hold the whole
+// stream in memory.
+function isVinextStreamedApiResponse(response: Response): boolean {
+  return (response as ResponseWithVinextStreamingMetadata).__vinextStreamedApiResponse === true;
 }
 
 function logProdServerStarted(host: string, port: number, purpose: ProdServerOptions["purpose"]) {
@@ -916,7 +984,7 @@ function sendStaticMethodNotAllowed(
 ): void {
   const body = "Method Not Allowed";
   res.writeHead(405, {
-    ...extraHeaders,
+    ...omitHeadersCaseInsensitive(extraHeaders ?? {}, OMIT_METHOD_NOT_ALLOWED_HEADERS),
     Allow: "GET, HEAD",
     "Content-Type": "text/plain; charset=utf-8",
     "Content-Length": String(Buffer.byteLength(body)),
@@ -1061,13 +1129,12 @@ function nodeToWebRequest(
   const origin = `${proto}://${host}`;
   const url = new URL(urlOverride ?? req.url ?? "/", origin);
 
-  const prerenderRouteParamsPayload = readTrustedPrerenderRouteParamsFromHeaders(
-    rawHeaders,
-    prerenderSecret,
-  );
+  const prerenderRouteParamsPayload = prerenderSecret
+    ? readTrustedPrerenderRouteParamsFromHeaders(rawHeaders, prerenderSecret)
+    : null;
   const isTrustedSpeculativePrerender =
     process.env.VINEXT_PRERENDER === "1" &&
-    prerenderSecret !== undefined &&
+    Boolean(prerenderSecret) &&
     rawHeaders.get(VINEXT_PRERENDER_SECRET_HEADER) === prerenderSecret &&
     rawHeaders.get(VINEXT_PRERENDER_SPECULATIVE_HEADER) === "1";
   // Strip internal headers that should not be honored from external requests.
@@ -1201,6 +1268,7 @@ export async function startProdServer(options: ProdServerOptions = {}) {
     host = "0.0.0.0",
     outDir = path.resolve("dist"),
     rscEntryPath: explicitRscEntryPath,
+    serverDir: explicitServerDir,
     serverEntryPath: explicitServerEntryPath,
     noCompression = false,
     purpose,
@@ -1211,14 +1279,17 @@ export async function startProdServer(options: ProdServerOptions = {}) {
   // Always resolve outDir to absolute to ensure dynamic import() works
   const resolvedOutDir = path.resolve(outDir);
   const clientDir = path.join(resolvedOutDir, "client");
+  const serverDir = explicitServerDir
+    ? path.resolve(explicitServerDir)
+    : path.join(resolvedOutDir, "server");
 
   // Detect build type
   const rscEntryPath = explicitRscEntryPath
     ? path.resolve(explicitRscEntryPath)
-    : path.join(resolvedOutDir, "server", "index.js");
+    : path.join(serverDir, "index.js");
   const serverEntryPath = explicitServerEntryPath
     ? path.resolve(explicitServerEntryPath)
-    : path.join(resolvedOutDir, "server", "entry.js");
+    : path.join(serverDir, "entry.js");
   const isAppRouter = fs.existsSync(rscEntryPath);
 
   if (!isAppRouter && !fs.existsSync(serverEntryPath)) {
@@ -1228,7 +1299,16 @@ export async function startProdServer(options: ProdServerOptions = {}) {
   }
 
   if (isAppRouter) {
-    return startAppRouterServer({ port, host, clientDir, rscEntryPath, compress, purpose, silent });
+    return startAppRouterServer({
+      port,
+      host,
+      clientDir,
+      serverDir,
+      rscEntryPath,
+      compress,
+      purpose,
+      silent,
+    });
   }
 
   return startPagesRouterServer({
@@ -1248,6 +1328,7 @@ type AppRouterServerOptions = {
   port: number;
   host: string;
   clientDir: string;
+  serverDir: string;
   rscEntryPath: string;
   compress: boolean;
   purpose?: ProdServerOptions["purpose"];
@@ -1306,7 +1387,7 @@ function resolveAppRouterHandler(
   if (entry && typeof entry === "object" && "fetch" in entry) {
     const workerEntry = entry as WorkerAppRouterEntry;
     if (typeof workerEntry.fetch === "function") {
-      return (request, ctx) => Promise.resolve(workerEntry.fetch(request, undefined, ctx));
+      return (request, ctx) => Promise.resolve(workerEntry.fetch(request, process.env, ctx));
     }
   }
 
@@ -1482,17 +1563,18 @@ function installPagesClientAssets(options: {
  * 4. Stream the Web Response back (with optional compression)
  */
 async function startAppRouterServer(options: AppRouterServerOptions) {
-  const { port, host, clientDir, rscEntryPath, compress, purpose, silent } = options;
+  const { port, host, clientDir, serverDir, rscEntryPath, compress, purpose, silent } = options;
 
   // Load prerender secret written at build time by vinext:server-manifest plugin.
   // Used to authenticate internal /__vinext/prerender/* HTTP endpoints.
-  const prerenderSecret = readPrerenderSecret(path.dirname(rscEntryPath));
+  const prerenderSecret = readPrerenderSecret(serverDir);
 
   // Import the RSC handler. importServerEntryModule uses the bare file://
   // URL so lazy chunks that import the entry back resolve to the same module
   // instance, and only cache-busts when this function runs again after a
   // rebuild to the same path (e.g. across test describe blocks).
   const rscModule = await importServerEntryModule(rscEntryPath);
+  const rscEntryRequire = createServerEntryRequire(rscEntryPath);
   const rscHandler = resolveAppRouterHandler(rscModule.default);
 
   // `assetPrefix` is embedded as a compile-time constant in the generated
@@ -1520,7 +1602,7 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
       ? (rscModule.__imageConfig as ImageConfig)
       : undefined;
   if (imageConfig === undefined) {
-    const imageConfigPath = path.join(path.dirname(rscEntryPath), "image-config.json");
+    const imageConfigPath = path.join(serverDir, "image-config.json");
     if (fs.existsSync(imageConfigPath)) {
       try {
         imageConfig = JSON.parse(fs.readFileSync(imageConfigPath, "utf-8"));
@@ -1552,7 +1634,9 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
   // Seed the memory cache with pre-rendered routes so the first request to
   // any pre-rendered page is a cache HIT instead of a full re-render.
   const seedPrerenderedRoutes = resolveAppRouterPrerenderSeeder(rscModule);
-  const seededRoutes = await seedPrerenderedRoutes(path.dirname(rscEntryPath));
+  const seededRoutes = await runWithServerEntryRequire(rscEntryRequire, () =>
+    seedPrerenderedRoutes(serverDir),
+  );
   if (seededRoutes > 0) {
     console.log(
       `[vinext] Seeded ${seededRoutes} pre-rendered route${seededRoutes !== 1 ? "s" : ""} into memory cache`,
@@ -1598,7 +1682,8 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
     // is not preserved in the bundle output format.
     if (
       pathname === "/__vinext/prerender/static-params" ||
-      pathname === "/__vinext/prerender/pages-static-paths"
+      pathname === "/__vinext/prerender/pages-static-paths" ||
+      pathname === "/__vinext/prerender/metadata-routes"
     ) {
       const secret = req.headers[VINEXT_PRERENDER_SECRET_HEADER];
       if (!prerenderSecret || secret !== prerenderSecret) {
@@ -1707,13 +1792,16 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
       // identifies the request as a public/static-file lookup. Middleware may
       // still handle or rewrite the request by returning a non-404 response.
       if (missingBuildAsset && response.status === 404) {
-        cancelResponseBody(response);
-        res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-        res.end("Not Found");
+        await sendWebResponse(
+          finalizeMissingStaticAssetResponse(response, true),
+          req,
+          res,
+          compress,
+        );
         return;
       }
 
-      const staticFileSignal = response.headers.get(VINEXT_STATIC_FILE_HEADER);
+      const staticFileSignal = readStaticFileSignal(response);
       if (staticFileSignal) {
         let staticFilePath = "/";
         try {
@@ -1755,6 +1843,9 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
     } catch (e) {
       console.error("[vinext] Server error:", e);
       if (!res.headersSent) {
+        if (purpose === "prerender") {
+          res.setHeader(VINEXT_PRERENDER_RENDER_ERROR_HEADER, "1");
+        }
         res.writeHead(500);
         res.end("Internal Server Error");
       }
@@ -1762,7 +1853,7 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
   };
 
   const server = createServer((req, res) => {
-    void handleRequest(req, res);
+    void runWithServerEntryRequire(rscEntryRequire, () => handleRequest(req, res));
   });
 
   await new Promise<void>((resolve) => {
@@ -1832,6 +1923,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
   // module instance, and only cache-busts when this function runs again after
   // a rebuild to the same output path.
   const serverEntry = await importServerEntryModule(serverEntryPath);
+  const serverEntryRequire = createServerEntryRequire(serverEntryPath);
   const {
     renderPage,
     handleApiRoute: handleApi,
@@ -1842,6 +1934,8 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
   } = serverEntry;
   const matchPageRoute =
     typeof serverEntry.matchPageRoute === "function" ? serverEntry.matchPageRoute : undefined;
+  const matchApiRoute =
+    typeof serverEntry.matchApiRoute === "function" ? serverEntry.matchApiRoute : undefined;
   const hasMiddleware = serverEntry.hasMiddleware === true;
   const pageRoutes = readPagesServerEntryPageRoutes(serverEntry.pageRoutes);
 
@@ -1858,6 +1952,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
   const pagesAssetPathPrefix = assetPrefixPathname(assetPrefix);
   const assetBase = basePath ? `${basePath}/` : "/";
   const trailingSlash: boolean = vinextConfig?.trailingSlash ?? false;
+  const skipProxyUrlNormalize: boolean = vinextConfig?.skipProxyUrlNormalize ?? false;
   const i18nConfig = vinextConfig?.i18n ?? null;
   const configRedirects = vinextConfig?.redirects ?? [];
   const configRewrites = vinextConfig?.rewrites ?? {
@@ -1946,8 +2041,8 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
       const route = pageRoutes?.find((r) => r.pattern === pattern);
       const fn = route?.module?.getStaticPaths;
       if (typeof fn !== "function") {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end("null");
+        res.writeHead(204);
+        res.end();
         return;
       }
       try {
@@ -1979,62 +2074,16 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
     // Next.js parity fallback fires — packages/next/src/server/config.ts:528-531),
     // so stripping `basePath` first would make `resolveAppRouterAssetPath`'s
     // path-prefix branch miss the match and return null → 404.
-    // `staticLookupPath` is still computed because non-asset paths below
-    // (image-optimization, SSR routing) match against the basePath-stripped form.
-    //
     // Existing build assets bypass middleware. Missing asset-shaped requests
     // must still reach middleware so it can rewrite or respond; if routing
     // ultimately returns 404, convert it back to the canonical plain-text
     // static-file response below.
-    const staticLookupPath = stripBasePath(pathname, basePath);
     const pagesAssetLookup = resolveAppRouterAssetPath(pathname, pagesAssetPathPrefix, assetPrefix);
     const missingBuildAsset = pagesAssetLookup !== null;
     if (pagesAssetLookup) {
       if (await tryServeStatic(req, res, clientDir, pagesAssetLookup, compress, staticCache)) {
         return;
       }
-    }
-
-    // ── Image optimization passthrough ──────────────────────────────
-    if (isImageOptimizationPath(pathname) || isImageOptimizationPath(staticLookupPath)) {
-      const parsedUrl = new URL(rawUrl, "http://localhost");
-      const params = parseImageParams(parsedUrl, allowedImageWidths, pagesImageConfig?.qualities);
-      if (!params) {
-        res.writeHead(400);
-        res.end("Bad Request");
-        return;
-      }
-      // Block SVG and other unsafe content types.
-      // SVG is only allowed when dangerouslyAllowSVG is enabled.
-      const ct = contentTypeForPath(params.imageUrl);
-      if (!isSafeImageContentType(ct, pagesImageConfig?.dangerouslyAllowSVG)) {
-        res.writeHead(400);
-        res.end("The requested resource is not an allowed image type");
-        return;
-      }
-      const imageSecurityHeaders: Record<string, string> = {
-        "Content-Security-Policy":
-          pagesImageConfig?.contentSecurityPolicy ?? IMAGE_CONTENT_SECURITY_POLICY,
-        "X-Content-Type-Options": "nosniff",
-        "Content-Disposition":
-          pagesImageConfig?.contentDispositionType === "attachment" ? "attachment" : "inline",
-      };
-      if (
-        await tryServeStatic(
-          req,
-          res,
-          clientDir,
-          params.imageUrl,
-          false,
-          staticCache,
-          imageSecurityHeaders,
-        )
-      ) {
-        return;
-      }
-      res.writeHead(404);
-      res.end("Image not found");
-      return;
     }
 
     try {
@@ -2071,13 +2120,11 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
       }
       // ── 3b. `_next/data` normalization ────────────────────────────
       // Pages Router client-side navigations fetch
-      // `/_next/data/<buildId>/<page>.json`. The page path must be normalized
-      // BEFORE middleware runs so middleware sees `/page`, matching Next.js
-      // (see `handleNextDataRequest` in base-server.ts). If the buildId in the
-      // URL does not match this server's buildId we return a JSON 404 right
-      // here — stale clients can fall back to a hard navigation without
-      // accidentally triggering middleware/SSR on a bogus path.
+      // `/_next/data/<buildId>/<page>.json`. Route matching uses the normalized
+      // page path, while skipProxyUrlNormalize preserves the original URL for
+      // middleware. A stale build ID is deferred until middleware continues.
       let isDataReq = false;
+      let dataNotFoundResponse: Response | null = null;
       const originalRenderUrl = url;
       if (isNextDataPathname(requestPathname)) {
         const dataMatch = pagesBuildId
@@ -2087,19 +2134,28 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
           // Wrong buildId (or malformed) — surface a JSON 404 so the client
           // hard-navigates instead of silently rendering an empty page.
           const notFound = buildNextDataNotFoundResponse();
-          await sendWebResponse(notFound, req, res, compress);
-          return;
+          if (!skipProxyUrlNormalize) {
+            await sendWebResponse(notFound, req, res, compress);
+            return;
+          }
+          isDataReq = true;
+          dataNotFoundResponse = notFound;
+        } else {
+          isDataReq = true;
+          const qs = url.includes("?") ? url.slice(url.indexOf("?")) : "";
+          const pagePathname = normalizeNextDataPagePathname(
+            dataMatch.pagePathname,
+            shouldAddTrailingSlashToPagesDataPath(
+              hasMiddleware,
+              trailingSlash,
+              skipProxyUrlNormalize,
+            ),
+          );
+          url = pagePathname + qs;
+          requestPathname = pagePathname;
+          pathname = pagePathname;
+          configMatchPathname = pagePathname;
         }
-        isDataReq = true;
-        const qs = url.includes("?") ? url.slice(url.indexOf("?")) : "";
-        const pagePathname = normalizeNextDataPagePathname(
-          dataMatch.pagePathname,
-          hasMiddleware && trailingSlash,
-        );
-        url = pagePathname + qs;
-        requestPathname = pagePathname;
-        pathname = pagePathname;
-        configMatchPathname = pagePathname;
       }
 
       // Convert Node.js req to Web Request for the server entry
@@ -2111,9 +2167,9 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
         i18nConfig,
         typeof authorizeOnDemandRevalidate === "function" ? authorizeOnDemandRevalidate : undefined,
       );
-      // Only a successfully parsed `/_next/data/...json` URL is a data
-      // request. The inbound x-nextjs-data header is internal and must not let
-      // callers opt normal URLs into the data redirect protocol.
+      // Only a recognized `/_next/data/...json` URL is a data request. The
+      // inbound x-nextjs-data header is internal and must not let callers opt
+      // normal URLs into the data redirect protocol.
       const isDataRequest = isDataReq;
       // Strip internal headers from inbound requests before any handler or
       // middleware sees them.
@@ -2128,6 +2184,10 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
         // @ts-expect-error — duplex needed for streaming request bodies
         duplex: hasBody ? "half" : undefined,
       });
+      const middlewareRequest =
+        isDataReq && skipProxyUrlNormalize
+          ? new Request(new URL(originalRenderUrl, webRequest.url), webRequest)
+          : undefined;
 
       // ── Delegate steps 3–11 to the shared Pages Router pipeline ──
       const deps: PagesPipelineDeps = {
@@ -2141,6 +2201,8 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
         isDataReq,
         isDataRequest,
         hasMiddleware,
+        middlewareRequest,
+        dataNotFoundResponse,
         ctx: undefined, // Node has no ExecutionContext
         // Raw query from req.url so redirect Locations aren't re-encoded by URL parsing.
         rawSearch: rawQs,
@@ -2150,6 +2212,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
             : undefined,
         configMatchPathname,
         matchPageRoute: matchPageRoute ?? null,
+        matchApiRoute: matchApiRoute ?? null,
         // Pass the original (pre-basePath-stripping) URL to middleware so that
         // request.nextUrl.basePath reflects whether the URL actually had the
         // basePath prefix (see wrapMiddlewareWithBasePath).
@@ -2188,9 +2251,55 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
         // (/_next/static/*) were already served above. Middleware response headers
         // (including next.config headers staged by the pipeline) are passed through so
         // Set-Cookie / security headers from middleware are included in the response.
-        serveFilesystemRoute: async (requestPathname, stagedHeaders, phase) => {
+        serveFilesystemRoute: async (requestPathname, stagedHeaders, phase, resolvedUrl) => {
+          // Next.js resolves middleware and beforeFiles rewrites before
+          // dispatching the built-in image endpoint.
+          if (isImageOptimizationPath(requestPathname)) {
+            for (const [name, value] of Object.entries(stagedHeaders)) {
+              res.setHeader(name, value);
+            }
+            const parsedUrl = new URL(resolvedUrl, "http://localhost");
+            const params = parseImageParams(
+              parsedUrl,
+              allowedImageWidths,
+              pagesImageConfig?.qualities,
+            );
+            if (!params) {
+              res.writeHead(400);
+              res.end("Bad Request");
+              return true;
+            }
+            const ct = contentTypeForPath(params.imageUrl);
+            if (!isSafeImageContentType(ct, pagesImageConfig?.dangerouslyAllowSVG)) {
+              res.writeHead(400);
+              res.end("The requested resource is not an allowed image type");
+              return true;
+            }
+            const imageSecurityHeaders: Record<string, string> = {
+              "Content-Security-Policy":
+                pagesImageConfig?.contentSecurityPolicy ?? IMAGE_CONTENT_SECURITY_POLICY,
+              "X-Content-Type-Options": "nosniff",
+              "Content-Disposition":
+                pagesImageConfig?.contentDispositionType === "attachment" ? "attachment" : "inline",
+            };
+            if (
+              await tryServeStatic(
+                req,
+                res,
+                clientDir,
+                params.imageUrl,
+                false,
+                staticCache,
+                imageSecurityHeaders,
+              )
+            ) {
+              return true;
+            }
+            res.writeHead(404);
+            res.end("Image not found");
+            return true;
+          }
           if (
-            (req.method !== "GET" && req.method !== "HEAD") ||
             requestPathname === "/" ||
             requestPathname === "/api" ||
             requestPathname.startsWith("/api/") ||
@@ -2220,17 +2329,31 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
       if (result.type === "response") {
         const { response } = result;
         if (missingBuildAsset && response.status === 404) {
-          cancelResponseBody(response);
-          res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-          res.end("Not Found");
+          await sendWebResponse(
+            finalizeMissingStaticAssetResponse(response, true),
+            req,
+            res,
+            compress,
+          );
           return;
         }
-        const shouldStream = isVinextStreamedHtmlResponse(response);
+        const streamedApi = isVinextStreamedApiResponse(response);
+        const shouldStream = isVinextStreamedHtmlResponse(response) || streamedApi;
         // Passthrough responses (middleware short-circuits, external proxies, redirects)
         // carry no defaultContentType — send them verbatim without injecting a
-        // Content-Type, matching the pre-refactor behavior. Only buffered render/api
-        // responses below apply a Content-Type fallback.
+        // Content-Type, matching the pre-refactor behavior. Buffered render/api
+        // responses below apply a Content-Type fallback; streamed API responses
+        // apply the same fallback here since they skip the buffered path. Live
+        // API bodies also cannot use the buffered path's size threshold without
+        // defeating streaming, so sendWebResponse chooses compression up front.
         if (shouldStream || !response.body || result.defaultContentType === undefined) {
+          if (
+            streamedApi &&
+            result.defaultContentType !== undefined &&
+            !response.headers.has("content-type")
+          ) {
+            response.headers.set("content-type", result.defaultContentType);
+          }
           await sendWebResponse(response, req, res, compress);
           return;
         }
@@ -2267,6 +2390,9 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
     } catch (e) {
       console.error("[vinext] Server error:", e);
       if (!res.headersSent) {
+        if (purpose === "prerender") {
+          res.setHeader(VINEXT_PRERENDER_RENDER_ERROR_HEADER, "1");
+        }
         res.writeHead(500);
         res.end("Internal Server Error");
       }
@@ -2274,7 +2400,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
   };
 
   const server = createServer((req, res) => {
-    void handleRequest(req, res);
+    void runWithServerEntryRequire(serverEntryRequire, () => handleRequest(req, res));
   });
 
   await new Promise<void>((resolve) => {

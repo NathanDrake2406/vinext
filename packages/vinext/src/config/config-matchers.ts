@@ -15,6 +15,7 @@ import type {
 import {
   MIDDLEWARE_CACHE_HEADER,
   MIDDLEWARE_HEADER_PREFIX,
+  MIDDLEWARE_REQUEST_HEADER_PREFIX,
   PRERENDER_REVALIDATE_HEADER,
   PRERENDER_REVALIDATE_ONLY_GENERATED_HEADER,
   VINEXT_MW_CTX_HEADER,
@@ -22,7 +23,10 @@ import {
   VINEXT_PRERENDER_SECRET_HEADER,
   VINEXT_REVALIDATE_HOST_HEADER,
 } from "../utils/protocol-headers.js";
-import { buildRequestHeadersFromMiddlewareResponse } from "../utils/middleware-request-headers.js";
+import {
+  buildRequestHeadersFromMiddlewareResponse,
+  getUnconsumedMiddlewareRequestHeaders,
+} from "../utils/middleware-request-headers.js";
 import { analyzeRegexSafety } from "../utils/regex-safety.js";
 import { requestContextFromRequest, type RequestContext } from "./request-context.js";
 import { isExternalUrl } from "../utils/external-url.js";
@@ -448,16 +452,16 @@ function shouldEvaluateRule(ruleBasePath: false | undefined, state: BasePathMatc
 export function applyMiddlewareRequestHeaders(
   middlewareHeaders: Record<string, string | string[]>,
   request: Request,
-  options: { preserveCredentialHeaders?: boolean } = {},
 ): { request: Request; postMwReqCtx: RequestContext } {
-  const nextHeaders = buildRequestHeadersFromMiddlewareResponse(
-    request.headers,
-    middlewareHeaders,
-    options,
-  );
+  const nextHeaders = buildRequestHeadersFromMiddlewareResponse(request.headers, middlewareHeaders);
+  const unconsumedRequestHeaders = getUnconsumedMiddlewareRequestHeaders(middlewareHeaders);
 
   for (const key of Object.keys(middlewareHeaders)) {
-    if (key.startsWith(MIDDLEWARE_HEADER_PREFIX) && key !== MIDDLEWARE_CACHE_HEADER) {
+    if (
+      key.startsWith(MIDDLEWARE_HEADER_PREFIX) &&
+      key !== MIDDLEWARE_CACHE_HEADER &&
+      !unconsumedRequestHeaders.has(key)
+    ) {
       delete middlewareHeaders[key];
     }
   }
@@ -831,6 +835,7 @@ export function matchRedirect(
   redirects: NextRedirect[],
   ctx: RequestContext,
   basePathState: BasePathMatchState = _BASEPATH_DEFAULT,
+  onRuleSourceMatch?: (rule: NextRedirect) => void,
 ): { destination: string; permanent: boolean } | null {
   if (redirects.length === 0) return null;
 
@@ -871,6 +876,7 @@ export function matchRedirect(
         if (entry.originalIndex >= localeMatchIndex) continue; // already have a better match
         const redirect = entry.redirect;
         if (!shouldEvaluateRule(redirect.basePath, basePathState)) continue;
+        onRuleSourceMatch?.(redirect);
         const conditionParams =
           redirect.has || redirect.missing
             ? collectConditionParams(redirect.has, redirect.missing, ctx)
@@ -902,6 +908,7 @@ export function matchRedirect(
           if (!entry.altRe.test(localePart)) continue;
           const redirect = entry.redirect;
           if (!shouldEvaluateRule(redirect.basePath, basePathState)) continue;
+          onRuleSourceMatch?.(redirect);
           const conditionParams =
             redirect.has || redirect.missing
               ? collectConditionParams(redirect.has, redirect.missing, ctx)
@@ -932,6 +939,7 @@ export function matchRedirect(
     if (!shouldEvaluateRule(redirect.basePath, basePathState)) continue;
     const params = matchConfigPattern(pathname, redirect.source);
     if (params) {
+      onRuleSourceMatch?.(redirect);
       const conditionParams =
         redirect.has || redirect.missing
           ? collectConditionParams(redirect.has, redirect.missing, ctx)
@@ -964,11 +972,13 @@ export function matchRewrite(
   ctx: RequestContext,
   basePathState: BasePathMatchState = _BASEPATH_DEFAULT,
   paramsPathname: string = pathname,
+  onRuleSourceMatch?: (rule: NextRewrite) => void,
 ): string | null {
   for (const rewrite of rewrites) {
     if (!shouldEvaluateRule(rewrite.basePath, basePathState)) continue;
     const matchedParams = matchConfigPattern(pathname, rewrite.source);
     if (matchedParams) {
+      onRuleSourceMatch?.(rewrite);
       // App request routing matches against a segment-normalized pathname but
       // Next.js prepareDestination substitutes the encoded source captures.
       // Prefer those captures when the caller retained the encoded pathname.
@@ -1281,9 +1291,15 @@ export async function proxyExternalRequest(
   // proxy and backend (defense-in-depth against request smuggling,
   // ref: CVE GHSA-ggv3-7p47-pfv8).
   stripHopByHopRequestHeaders(headers);
+  // Next.js forwards truthy x-middleware-request-* values that were not
+  // consumed by an override list under their literal names. Other middleware
+  // protocol controls must not escape to the external origin.
   const keysToDelete: string[] = [];
   for (const key of headers.keys()) {
-    if (key.startsWith(MIDDLEWARE_HEADER_PREFIX)) {
+    if (
+      key.startsWith(MIDDLEWARE_HEADER_PREFIX) &&
+      !key.startsWith(MIDDLEWARE_REQUEST_HEADER_PREFIX)
+    ) {
       keysToDelete.push(key);
     }
   }
@@ -1374,6 +1390,7 @@ export function matchHeaders(
   headers: NextHeader[],
   ctx: RequestContext,
   basePathState: BasePathMatchState = _BASEPATH_DEFAULT,
+  onRuleSourceMatch?: (rule: NextHeader) => void,
 ): Array<{ key: string; value: string }> {
   const pathnameHadTrailingSlash = pathname.length > 1 && pathname.endsWith("/");
   pathname = stripTrailingSlashForConfigMatch(pathname);
@@ -1390,6 +1407,7 @@ export function matchHeaders(
       safeRegExp("^" + escapeHeaderSource(source) + "$", "i"),
     );
     if (sourceRegex && sourceRegex.test(pathname)) {
+      onRuleSourceMatch?.(rule);
       if (rule.has || rule.missing) {
         if (!checkHasConditions(rule.has, rule.missing, ctx)) {
           continue;

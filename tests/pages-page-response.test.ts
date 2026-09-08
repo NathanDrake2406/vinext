@@ -30,6 +30,15 @@ function getStartTags(html: string, tagName: string): string[] {
   return tags;
 }
 
+function expectFragmentsInOrder(html: string, fragments: string[]): void {
+  let previousIndex = -1;
+  for (const fragment of fragments) {
+    const index = html.indexOf(fragment);
+    expect(index, `missing or out-of-order fragment: ${fragment}`).toBeGreaterThan(previousIndex);
+    previousIndex = index;
+  }
+}
+
 function createStream(chunks: string[]): ReadableStream<Uint8Array> {
   return new ReadableStream({
     start(controller) {
@@ -151,6 +160,20 @@ describe("isPagesStreamingBot", () => {
     ).toBe(true);
   });
 
+  it("detects Google crawlers with the -Google suffix", () => {
+    expect(isPagesStreamingBot("Mediapartners-Google/2.1")).toBe(true);
+    expect(isPagesStreamingBot("AdsBot-Google (+http://www.google.com/adsbot.html)")).toBe(true);
+    expect(isPagesStreamingBot("Mozilla/5.0 Storebot-Google/1.0")).toBe(true);
+  });
+
+  it(
+    "handles long non-matching User-Agents without quadratic backtracking",
+    { timeout: 500 },
+    () => {
+      expect(isPagesStreamingBot("a".repeat(64_000))).toBe(false);
+    },
+  );
+
   it("detects other known HTML-limited bots", () => {
     expect(isPagesStreamingBot("Bingbot/2.0")).toBe(true);
     expect(isPagesStreamingBot("facebookexternalhit/1.1")).toBe(true);
@@ -189,7 +212,7 @@ describe("pages page response", () => {
     });
 
     expect(response.status).toBe(201);
-    expect(response.headers.get("content-type")).toBe("text/html; charset=utf-8");
+    expect(response.headers.get("content-type")).toBe("application/json");
     expect(response.headers.get("x-test")).toBe("1");
     expect(response.headers.get("link")).toBe(
       "</font.woff2>; rel=preload; as=font; type=font/woff2; crossorigin",
@@ -269,10 +292,25 @@ describe("pages page response", () => {
         html: expect.stringContaining("<div>live-body</div>"),
         pageData: { pageProps: { title: "hello" } },
       }),
-      60,
-      undefined,
-      300,
+      { cacheControl: { revalidate: 60, expire: 300 } },
     );
+  });
+
+  it("reports the resolved Pages tag after an on-demand regeneration", async () => {
+    const common = createCommonOptions();
+
+    const response = await renderPagesPageResponse({
+      ...common.options,
+      DocumentComponent: null,
+      getSSRHeadHTML: undefined,
+      isOnDemandRevalidate: true,
+      isrCachePathname: "/posts/resolved",
+      isrRevalidateSeconds: 60,
+      routeUrl: "/posts/alias",
+    });
+
+    expect(response.headers.get("x-nextjs-cache")).toBe("REVALIDATED");
+    expect(response.headers.get("x-vinext-revalidated-cache-tag")).toBe("_N_T_/posts/resolved");
   });
 
   it("persists indefinite Pages results while formatting a static response policy", async () => {
@@ -293,9 +331,7 @@ describe("pages page response", () => {
     expect(common.isrSet).toHaveBeenCalledWith(
       "pages:/posts/post",
       expect.objectContaining({ kind: "PAGES" }),
-      false,
-      undefined,
-      undefined,
+      { cacheControl: { revalidate: false } },
     );
   });
 
@@ -322,9 +358,7 @@ describe("pages page response", () => {
       expect.objectContaining({
         html: expect.stringContaining("\u20ac<div>live-body</div>"),
       }),
-      60,
-      undefined,
-      undefined,
+      { cacheControl: { revalidate: 60 } },
     );
   });
 
@@ -472,6 +506,56 @@ describe("pages page response", () => {
     );
     expect(generatedScript).toContain('crossorigin="anonymous"');
     expect(generatedPreload).toContain('crossorigin="anonymous"');
+  });
+
+  it("places collected head tags before custom Document children", async () => {
+    // Ported from Next.js: test/e2e/next-head/index.test.ts
+    // https://github.com/vercel/next.js/blob/canary/test/e2e/next-head/index.test.ts
+    const common = createCommonOptions();
+    common.renderDocumentToString.mockResolvedValue(
+      '<!DOCTYPE html><html><head data-theme="dark"><meta name="document-child" content="1" /></head>' +
+        '<body><div id="__next">__NEXT_MAIN__</div><!-- __NEXT_SCRIPTS__ --></body></html>',
+    );
+    common.options.getSSRHeadHTML = vi.fn(
+      () =>
+        '<meta charset="utf-8" data-next-head="" />' +
+        '<meta name="viewport" content="width=device-width" data-next-head="" />' +
+        '<meta name="page-head" content="1" data-next-head="" />',
+    );
+
+    const response = await renderPagesPageResponse(common.options);
+    const html = await response.text();
+    const headContents = html.match(/<head[^>]*>([\s\S]*?)<\/head>/i)?.[1] ?? "";
+
+    expect(headContents.trimStart()).toMatch(/^<meta charset="utf-8"/);
+    expectFragmentsInOrder(headContents, [
+      'charset="utf-8"',
+      'name="viewport"',
+      'name="page-head"',
+      'name="document-child"',
+    ]);
+  });
+
+  it("places collected head tags before generated font tags without a custom Document", async () => {
+    // Ported from Next.js: packages/next/src/pages/_document.tsx
+    // https://github.com/vercel/next.js/blob/canary/packages/next/src/pages/_document.tsx
+    const common = createCommonOptions();
+    common.options.getSSRHeadHTML = vi.fn(
+      () =>
+        '<meta charset="utf-8" data-next-head="" />' +
+        '<meta name="viewport" content="width=device-width" data-next-head="" />' +
+        '<meta name="page-head" content="1" data-next-head="" />',
+    );
+
+    const response = await renderPagesPageResponse({
+      ...common.options,
+      DocumentComponent: null,
+    });
+    const html = await response.text();
+    const headContents = html.match(/<head[^>]*>([\s\S]*?)<\/head>/i)?.[1] ?? "";
+
+    expect(headContents.trimStart()).toMatch(/^<meta charset="utf-8"/);
+    expectFragmentsInOrder(headContents, ['name="page-head"', 'rel="stylesheet"', 'as="font"']);
   });
 
   it("renders page before collecting SSR head HTML to prevent style race conditions", async () => {
@@ -802,7 +886,7 @@ describe("pages page response", () => {
       const text = await new Response(stream).text();
       // The document shell render still needs the NEXT placeholders.
       if (!text.includes("data-collected")) {
-        return '<!DOCTYPE html><html><head></head><body><div id="__next">__NEXT_MAIN__</div><!-- __NEXT_SCRIPTS__ --></body></html>';
+        return '<!DOCTYPE html><html><head><meta name="document-child" content="1" /></head><body><div id="__next">__NEXT_MAIN__</div><!-- __NEXT_SCRIPTS__ --></body></html>';
       }
       return text;
     });
@@ -820,6 +904,9 @@ describe("pages page response", () => {
     // The collected <style> tag landed in the head.
     expect(html).toContain('data-collected="true"');
     expect(html).toContain(".x{color:red}");
+    expect(html.indexOf('name="document-child"')).toBeLessThan(
+      html.indexOf('data-collected="true"'),
+    );
     // The body still rendered.
     expect(html).toContain("<p>page</p>");
   });

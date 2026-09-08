@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { createBuilder } from "vite";
 import { afterAll, describe, expect, it, vi } from "vite-plus/test";
 import vinext from "../packages/vinext/src/index.js";
+import { runPrerender } from "../packages/vinext/src/build/run-prerender.js";
 import { APP_FIXTURE_DIR } from "./helpers.js";
 
 type BuiltAppHandler = (request: Request) => Promise<Response | string | null | undefined>;
@@ -131,6 +132,8 @@ describe("App Router Production build", () => {
     expect(fs.existsSync(buildIdPath)).toBe(true);
     const buildId = fs.readFileSync(buildIdPath, "utf-8").trim();
     expect(buildId.length).toBeGreaterThan(0);
+    const rscBuildId = fs.readFileSync(path.join(outDir, "server", "RSC_BUILD_ID"), "utf-8").trim();
+    expect(rscBuildId).toMatch(/^[0-9a-f]{32}$/);
 
     const warmupManifestPath = path.join(outDir, "server", "vinext-prerender-paths.json");
     expect(fs.existsSync(warmupManifestPath)).toBe(false);
@@ -209,6 +212,33 @@ describe("App Router Production build", () => {
     } finally {
       if (previous === undefined) delete process.env.__VINEXT_SHARED_BUILD_ID;
       else process.env.__VINEXT_SHARED_BUILD_ID = previous;
+    }
+  }, 30000);
+
+  it("adopts the shared prerender discovery secret in the Worker and server manifest", async () => {
+    // Hybrid builds instantiate vinext twice; the CLI-provided value must win
+    // so the later Pages build cannot invalidate the App Worker's capability.
+    const sharedSecret = "ab".repeat(32);
+    const previous = process.env.__VINEXT_SHARED_PRERENDER_SECRET;
+    process.env.__VINEXT_SHARED_PRERENDER_SECRET = sharedSecret;
+    try {
+      const builder = await createBuilder({
+        root: APP_FIXTURE_DIR,
+        configFile: false,
+        plugins: [vinext({ appDir: APP_FIXTURE_DIR })],
+        logLevel: "silent",
+      });
+      await builder.buildApp();
+
+      expect(
+        JSON.parse(fs.readFileSync(path.join(outDir, "server", "vinext-server.json"), "utf-8")),
+      ).toEqual({ prerenderSecret: sharedSecret });
+      expect(fs.readFileSync(path.join(outDir, "server", "index.js"), "utf-8")).toContain(
+        sharedSecret,
+      );
+    } finally {
+      if (previous === undefined) delete process.env.__VINEXT_SHARED_PRERENDER_SECRET;
+      else process.env.__VINEXT_SHARED_PRERENDER_SECRET = previous;
     }
   }, 30000);
 
@@ -346,7 +376,7 @@ export default function proxy(request: NextRequest) {
         expect(rootResponse).toBeInstanceOf(Response);
         if (!(rootResponse instanceof Response)) return;
         expect(await rootResponse.text()).toContain("hello world");
-        expect(logSpy).toHaveBeenCalledWith(fs.realpathSync.native(path.join(tmpDir, "proxy.ts")));
+        expect(logSpy).toHaveBeenCalledWith(path.join(tmpDir, "dist", "server", "index.js"));
       } finally {
         logSpy.mockRestore();
       }
@@ -470,6 +500,77 @@ export function GET(request) {
       });
       await expect(builder.buildApp()).rejects.toThrow(
         'The file "./proxy.ts" must export a function, either as a default export or as a named "proxy" export.',
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }, 120000);
+
+  // Next.js returns the value decoded from one branch of the callable-cache
+  // Flight stream and saves the other branch, so a serializer error rejects
+  // the call instead of persisting an error row.
+  // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/use-cache/use-cache-wrapper.ts
+  it('fails prerendering when a callable "use cache" result cannot be serialized', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-use-cache-serialization-"));
+
+    try {
+      fs.writeFileSync(path.join(tmpDir, "package.json"), `{"type":"module"}`);
+      fs.symlinkSync(
+        path.resolve(import.meta.dirname, "../node_modules"),
+        path.join(tmpDir, "node_modules"),
+        "junction",
+      );
+      fs.mkdirSync(path.join(tmpDir, "app"), { recursive: true });
+      fs.writeFileSync(
+        path.join(tmpDir, "app", "layout.tsx"),
+        `export default function Root({ children }: { children: React.ReactNode }) {
+  return <html><body>{children}</body></html>;
+}
+`,
+      );
+      fs.writeFileSync(
+        path.join(tmpDir, "app", "page.tsx"),
+        `export default function Page() { return <p>hello world</p>; }\n`,
+      );
+      fs.writeFileSync(
+        path.join(tmpDir, "app", "opengraph-image.tsx"),
+        `import { ImageResponse } from "next/og";
+
+export const size = { width: 1200, height: 630 };
+
+export default async function OpenGraphImage() {
+  "use cache";
+
+  return new ImageResponse(
+    <div style={{ display: "flex", width: "100%", height: "100%" }}>
+      vinext use-cache serialization regression
+    </div>,
+    size,
+  );
+}
+`,
+      );
+
+      const builder = await createBuilder({
+        root: tmpDir,
+        configFile: false,
+        plugins: [vinext({ appDir: tmpDir })],
+        logLevel: "silent",
+      });
+      await builder.buildApp();
+
+      const built: { default?: unknown } = await import(
+        `${pathToFileURL(path.join(tmpDir, "dist", "server", "index.js")).href}?t=${Date.now()}`
+      );
+      expect(isBuiltAppHandler(built.default)).toBe(true);
+      if (!isBuiltAppHandler(built.default)) return;
+
+      await expect(built.default(new Request("http://localhost/opengraph-image"))).rejects.toThrow(
+        /Only plain objects/,
+      );
+
+      await expect(runPrerender({ root: tmpDir, concurrency: 1 })).rejects.toThrow(
+        /Metadata route returned 500/,
       );
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });

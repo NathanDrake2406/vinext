@@ -17,12 +17,35 @@ export async function middleware(request: NextRequest, event: NextFetchEvent) {
   // Test NextRequest.nextUrl - this would fail with TypeError if request is plain Request
   const { pathname } = request.nextUrl;
 
+  if (pathname === "/internal-header-secret.txt") {
+    return new Response("blocked by middleware", {
+      status: 403,
+      headers: { "content-type": "text/plain" },
+    });
+  }
+
+  if (pathname === "/static-file-header-collision.txt") {
+    const response = NextResponse.next();
+    response.headers.set("x-vinext-static-file", "/internal-header-secret.txt");
+    return response;
+  }
+
   // Ported from Next.js: test/e2e/app-dir/app/middleware.js
   // https://github.com/vercel/next.js/blob/v16.2.6/test/e2e/app-dir/app/middleware.js
   // The source also exists in pages/, so the client must honor the middleware
   // rewrite to the App Router destination instead of committing a Pages SPA navigation.
   if (pathname === "/exists-but-not-routed") {
     return NextResponse.rewrite(new URL("/about", request.url));
+  }
+
+  // A concrete Pages route owns this destination even though the App Router's
+  // /docs/[...slug] catch-all also matches it. The Pages data response must run
+  // GSSP instead of being replaced by the App rewrite placeholder.
+  if (pathname === "/pages-data-rewrite-source") {
+    const response = NextResponse.rewrite(new URL("/docs/pages-data-rewrite-target", request.url));
+    response.cookies.set("pages-rewrite-session", "middleware", { path: "/" });
+    response.headers.set("cache-control", "public, max-age=3600");
+    return response;
   }
 
   // Ported from Next.js: test/e2e/middleware-general/app/middleware-node.js
@@ -80,6 +103,11 @@ export async function middleware(request: NextRequest, event: NextFetchEvent) {
   response.headers.set("x-mw-pathname", pathname);
   response.headers.set("x-mw-ran", "true");
 
+  if (pathname === "/config-link-preload" && request.nextUrl.searchParams.has("middleware-link")) {
+    response.headers.set("Link", '</middleware.css>; rel="preload"; as="style"');
+    return response;
+  }
+
   if (sessionToken) {
     response.headers.set("x-mw-has-session", "true");
   }
@@ -115,10 +143,22 @@ export async function middleware(request: NextRequest, event: NextFetchEvent) {
     if (target) {
       const rewriteTarget = new URL("/middleware-external-target", target);
       rewriteTarget.search = request.nextUrl.search;
-      if (request.headers.get("x-middleware-test-request-override") === "1") {
+      const override = request.headers.get("x-middleware-test-request-override");
+      if (override === "stray-forwarded-value") {
+        const response = NextResponse.rewrite(rewriteTarget);
+        response.headers.set("x-middleware-request-x-added", "forged-by-middleware");
+        return response;
+      }
+      if (override === "1" || override === "strip-credentials") {
         const headers = new Headers(request.headers);
+        headers.set("x-added", "from-middleware");
         headers.set("x-hello-from-middleware1", "hello");
         headers.set("x-hello-from-middleware2", "world");
+        // Credentials deleted here must not reach the external target (#1121 regression).
+        if (override === "strip-credentials") {
+          headers.delete("cookie");
+          headers.delete("authorization");
+        }
         return NextResponse.rewrite(rewriteTarget, { request: { headers } });
       }
       return NextResponse.rewrite(rewriteTarget);
@@ -231,6 +271,22 @@ export async function middleware(request: NextRequest, event: NextFetchEvent) {
     return NextResponse.next({ request: { headers } });
   }
 
+  // Gate the hybrid Pages -> App API fallback rewrite on a request cookie
+  // injected by middleware. The Pages dev pipeline owns this middleware pass,
+  // so its App handoff must carry both the resolved target and request headers.
+  if (
+    pathname.startsWith("/api/pages-fallback-to-app/") &&
+    request.nextUrl.searchParams.has("mw-auth")
+  ) {
+    const headers = new Headers(request.headers);
+    const existing = headers.get("cookie") ?? "";
+    headers.set(
+      "cookie",
+      existing ? existing + "; mw-api-fallback-user=1" : "mw-api-fallback-user=1",
+    );
+    return NextResponse.next({ request: { headers } });
+  }
+
   // Middleware headers take precedence over next.config.js headers for the same key.
   // Middleware sets e2e-headers=middleware; config sets e2e-headers=next.config.js via /(.*).
   // Ref: opennextjs-cloudflare headers.test.ts — "Middleware headers override next.config.js headers"
@@ -246,6 +302,12 @@ export async function middleware(request: NextRequest, event: NextFetchEvent) {
     headers.delete("cookie");
     headers.set("x-from-middleware", "hello-from-middleware");
     return NextResponse.next({ request: { headers } });
+  }
+
+  if (pathname === "/api/header-override-stray") {
+    const response = NextResponse.next();
+    response.headers.set("x-middleware-request-x-added", "forged-by-middleware");
+    return response;
   }
 
   // Regression for a bug where a middleware that reads `next/headers` →
@@ -362,6 +424,12 @@ export async function middleware(request: NextRequest, event: NextFetchEvent) {
   }
   r.headers.set("x-mw-pathname", pathname);
   r.headers.set("x-mw-ran", "true");
+  if (pathname === "/about") {
+    r.headers.set(
+      "x-action-target-saw-source",
+      request.headers.get("x-action-source-only") ?? "missing",
+    );
+  }
   if (sessionToken) {
     r.headers.set("x-mw-has-session", "true");
   }
@@ -382,6 +450,7 @@ export const config = {
   matcher: [
     "/about",
     "/exists-but-not-routed",
+    "/pages-data-rewrite-source",
     "/middleware-redirect",
     "/middleware-rewrite",
     "/middleware-rewritten-use-pathname",
@@ -390,6 +459,8 @@ export const config = {
     "/middleware-rewrite-keep-original-query",
     "/middleware-rewrite-status",
     "/middleware-blocked",
+    "/internal-header-secret.txt",
+    "/static-file-header-collision.txt",
     "/admin",
     "/%61dmin",
     "/encoded-parity/middleware/:path*",
@@ -400,7 +471,9 @@ export const config = {
     "/headers/override-from-middleware",
     "/header-override-delete",
     "/api/header-override-delete",
+    "/api/header-override-stray",
     "/api/pages-og",
+    "/api/pages-fallback-to-app/:path*",
     "/header-override-after-prior-access",
     "/pages-header-override-delete",
     "/revalidate-test",
@@ -411,6 +484,7 @@ export const config = {
     "/nextjs-compat/action-forward-loop",
     "/nextjs-compat/action-node-mw",
     "/metadata-icons-stream/:path*",
+    "/config-link-preload",
     "/use-client-page-pathname/:path*",
     "/rsc-fetch-redirect-src",
     "/rsc-fetch-error-target",

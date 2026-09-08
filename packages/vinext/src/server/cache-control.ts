@@ -1,4 +1,11 @@
-import { getCdnCacheAdapter, type CdnCacheableHeaderInput } from "vinext/shims/cdn-cache";
+import {
+  getCdnCacheAdapter,
+  isNonCacheableCacheControl,
+  type CdnCacheableHeaderInput,
+} from "vinext/shims/cdn-cache";
+import { recordRouteCacheabilityCdnTags } from "vinext/shims/cacheability-classification";
+
+export { isNonCacheableCacheControl } from "vinext/shims/cdn-cache";
 
 export const NEVER_CACHE_CONTROL = "private, no-cache, no-store, max-age=0, must-revalidate";
 
@@ -11,7 +18,6 @@ const STALE_REVALIDATE_CACHE_CONTROL = "s-maxage=0, stale-while-revalidate";
 export const NO_STORE_CACHE_CONTROL = "no-store, must-revalidate";
 
 const SHARED_CACHE_DIRECTIVE_RE = /(?:^|,)\s*s-maxage\s*=/i;
-
 export function shouldUseNextDeployCacheControl(): boolean {
   return process.env.VINEXT_NEXT_DEPLOY_CACHE_CONTROL === "1";
 }
@@ -21,24 +27,71 @@ function isSharedCacheControl(cacheControl: string): boolean {
 }
 
 /**
+ * Whether an existing response explicitly opted out of storage. Adapters may
+ * inspect the provider-specific policy headers they own; the generic fallback
+ * only understands the framework-owned `Cache-Control` header.
+ */
+export function hasExplicitNonCacheableResponsePolicy(headers: Headers): boolean {
+  const adapter = getCdnCacheAdapter();
+  if (adapter.hasExplicitNonCacheableResponsePolicy) {
+    return adapter.hasExplicitNonCacheableResponsePolicy(headers);
+  }
+  const cacheControl = headers.get("Cache-Control");
+  return Boolean(cacheControl && isNonCacheableCacheControl(cacheControl));
+}
+
+/** Lowercase response-policy names owned by core and the active adapter. */
+export function getCdnResponsePolicyHeaderNames(): ReadonlySet<string> {
+  return new Set([
+    "cache-control",
+    ...(getCdnCacheAdapter().responsePolicyHeaderNames ?? []).map((name) => name.toLowerCase()),
+  ]);
+}
+
+/** Capture only cache-policy provenance from an outer composition stage. */
+function captureCdnResponsePolicyHeaders(headers: Headers): Headers {
+  const policy = new Headers();
+  for (const name of getCdnResponsePolicyHeaderNames()) {
+    const value = headers.get(name);
+    if (value !== null) policy.set(name, value);
+  }
+  return policy;
+}
+
+/** Capture policy values that were added above an already-transported baseline. */
+export function captureCdnResponsePolicyOverrides(headers: Headers, baseline: Headers): Headers {
+  const overrides = captureCdnResponsePolicyHeaders(headers);
+  for (const [name, value] of overrides) {
+    if (baseline.get(name) === value) overrides.delete(name);
+  }
+  return overrides;
+}
+
+/** Delegate provider-specific request routing validation to the CDN adapter. */
+export async function validateCdnRequest(request: Request): Promise<Response | null> {
+  return (await getCdnCacheAdapter().validateRequest?.(request)) ?? null;
+}
+
+/**
  * Route a cacheable response's headers through the active CDN cache adapter and
  * apply the result to `headers`. The default adapter yields a single
  * `Cache-Control` identical to `input.cacheControl` (no behavior change); edge
- * adapters may instead emit `CDN-Cache-Control` / `Cache-Tag`.
+ * adapters may instead emit provider-specific cache and invalidation headers.
  *
- * We only clear `Cache-Control` — the one header vinext stamps internally — so
- * a stale vinext value never lingers if an adapter chooses not to emit one. The
- * adapter's own headers are applied via `set()`, which overrides any prior value
- * for the same name, so there's no need to pre-clear adapter-specific headers.
+ * The adapter owns its provider-specific output: returning a value sets it,
+ * while returning `null` removes it. Core only clears the generic header it
+ * owns before applying that map.
  */
 export function applyCdnResponseHeaders(headers: Headers, input: CdnCacheableHeaderInput): void {
+  recordRouteCacheabilityCdnTags(input.tags);
   headers.delete("Cache-Control");
-  if (shouldUseNextDeployCacheControl() && isSharedCacheControl(input.cacheControl)) {
-    headers.set("Cache-Control", BROWSER_REVALIDATE_CACHE_CONTROL);
-    return;
-  }
-
-  const map = getCdnCacheAdapter().buildResponseHeaders(input);
+  const useNextDeployPolicy =
+    shouldUseNextDeployCacheControl() && isSharedCacheControl(input.cacheControl);
+  // An empty policy tells the adapter to remove any provider-specific cache
+  // metadata it owns before core applies the deployment-specific browser policy.
+  const map = getCdnCacheAdapter().buildResponseHeaders(
+    useNextDeployPolicy ? { ...input, cacheControl: "" } : input,
+  );
   for (const [name, value] of Object.entries(map)) {
     if (value === null) {
       headers.delete(name);
@@ -50,6 +103,93 @@ export function applyCdnResponseHeaders(headers: Headers, input: CdnCacheableHea
     // rather than being emitted as a blank value.
     if (value === "") continue;
     headers.set(name, value);
+  }
+  if (useNextDeployPolicy) {
+    headers.set("Cache-Control", BROWSER_REVALIDATE_CACHE_CONTROL);
+  }
+}
+
+/**
+ * Reconcile request-stage policy composed above a reusable response artifact.
+ * A newly applied private policy must clear any cacheable provider headers that
+ * belonged to the inner artifact before the final response leaves the gateway.
+ * `outerPolicyHeaders` contains only policy set by the uncached request stage,
+ * so an identical inner value cannot hide explicit outer provenance.
+ */
+export function reconcileCdnResponseHeadersAfterOuterPolicy(
+  headers: Headers,
+  outerPolicyHeaders: Headers,
+): void {
+  // Set-Cookie is additive and therefore is not part of the policy-only
+  // provenance snapshot. It can still be introduced by the uncached request
+  // stage after a shared artifact returns, and the completed response must not
+  // retain that artifact's shared-cache policy.
+  if (headers.has("set-cookie")) {
+    applyCdnResponseHeaders(headers, { cacheControl: NO_STORE_CACHE_CONTROL });
+    return;
+  }
+  const cacheControl = outerPolicyHeaders.get("cache-control");
+  if (cacheControl !== null) {
+    applyCdnResponseHeaders(headers, { cacheControl });
+    // Preserve any explicit provider-specific policy authored alongside the
+    // generic middleware policy after the adapter has derived its defaults.
+    for (const name of getCdnResponsePolicyHeaderNames()) {
+      if (name === "cache-control") continue;
+      const value = outerPolicyHeaders.get(name);
+      if (value !== null) headers.set(name, value);
+    }
+    return;
+  }
+  for (const name of getCdnResponsePolicyHeaderNames()) {
+    const value = outerPolicyHeaders.get(name);
+    if (value !== null && isNonCacheableCacheControl(value)) {
+      headers.set(name, value);
+      applyCdnResponseHeaders(headers, { cacheControl: value });
+      return;
+    }
+  }
+  if (hasExplicitNonCacheableResponsePolicy(outerPolicyHeaders)) {
+    applyCdnResponseHeaders(headers, { cacheControl: NO_STORE_CACHE_CONTROL });
+  }
+}
+
+/** Apply adapter-owned build identity to an HTML or RSC page response. */
+export function applyCdnResponseIdentityHeaders(response: Response, request: Request): Response {
+  const accept = request.headers.get("Accept")?.toLowerCase() ?? "";
+  const isPagesDataRequest = /(?:^|\/)_next\/data\/[^/]+\/.+\.json$/.test(
+    new URL(request.url).pathname,
+  );
+  if (request.headers.get("RSC") !== "1" && !accept.includes("text/html") && !isPagesDataRequest) {
+    return response;
+  }
+  return applyCdnResponseBuildIdentityHeaders(response);
+}
+
+/** Apply adapter-owned build identity to an already-classified response. */
+export function applyCdnResponseBuildIdentityHeaders(response: Response): Response {
+  const map = getCdnCacheAdapter().buildResponseIdentityHeaders?.();
+  if (!map || Object.keys(map).length === 0) return response;
+
+  try {
+    applyResponseHeaderMap(response.headers, map);
+    return response;
+  } catch {
+    // Response.redirect() has immutable headers. Recreate only those responses
+    // that need adapter identity so the outer runtime boundary can stamp them.
+    const headers = new Headers(response.headers);
+    applyResponseHeaderMap(headers, map);
+    return new Response(response.body, {
+      headers,
+      status: response.status,
+      statusText: response.statusText,
+    });
+  }
+}
+
+function applyResponseHeaderMap(headers: Headers, map: Record<string, string | null>): void {
+  for (const [name, value] of Object.entries(map)) {
+    if (value === null) headers.delete(name);
+    else headers.set(name, value);
   }
 }
 

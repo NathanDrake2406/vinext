@@ -10,6 +10,7 @@
  * io() for hanging-promise behavior during prerendering.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
+import { registerAlsForScopeExit } from "./als-registry.js";
 
 // ── WorkUnitStore discriminated union ───────────────────────────────────
 
@@ -23,6 +24,8 @@ export type PrerenderStore = {
   readonly renderSignal: AbortSignal;
   /** Optional route identifier for debugging and error messages. */
   readonly route?: string;
+  /** Interrupts the owning prerender without exposing a catchable error to user code. */
+  readonly signalPrerenderBailout?: (expression: string) => void;
 };
 
 export type CacheStore = {
@@ -51,6 +54,10 @@ export type WorkUnitStore =
 export type WorkUnitAsyncStorage = AsyncLocalStorage<WorkUnitStore>;
 
 export const workUnitAsyncStorage: WorkUnitAsyncStorage = new AsyncLocalStorage();
+
+// Stays module-local (Sentry resolves this module by specifier), so enrol it
+// for scope exit explicitly instead of creating it via `getOrCreateAls`.
+registerAlsForScopeExit(workUnitAsyncStorage as unknown as AsyncLocalStorage<never>);
 
 // Legacy name (Next 13.x–14.x)
 export const requestAsyncStorage = workUnitAsyncStorage;

@@ -119,6 +119,7 @@ export function createRequestContext(opts?: Partial<UnifiedRequestContext>): Uni
     currentRequestTags: [],
     currentFetchSoftTags: [],
     currentFetchCacheMode: null,
+    currentFetchRevalidate: null,
     currentForceDynamicFetchDefault: false,
     dynamicFetchUrls: new Set<string>(),
     refreshStaleFetchesInForeground: false,
@@ -368,6 +369,9 @@ export function closeAfterResponseWithBody(
   (wrapped as { __vinextStreamedHtmlResponse?: boolean }).__vinextStreamedHtmlResponse = (
     response as { __vinextStreamedHtmlResponse?: boolean }
   ).__vinextStreamedHtmlResponse;
+  (wrapped as { __vinextStreamedApiResponse?: boolean }).__vinextStreamedApiResponse = (
+    response as { __vinextStreamedApiResponse?: boolean }
+  ).__vinextStreamedApiResponse;
   return wrapped;
 }
 
