@@ -77,8 +77,8 @@ function finishCacheRevalidation(writeFamily: string, coordinator: CacheWriteCoo
   }
 }
 
-export function hasPendingCacheRevalidation(cacheKey: string): boolean {
-  return getPendingCacheRevalidations().get(cacheKey)?.current.active === true;
+export function hasPendingCacheWrites(writeFamily: string): boolean {
+  return (getCacheWriteCoordinators().get(writeFamily)?.active ?? 0) > 0;
 }
 
 /** Run one foreground fill and supersede any older background refresh. */

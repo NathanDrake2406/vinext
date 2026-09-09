@@ -492,7 +492,9 @@ describe("function cache revalidation", () => {
 
   it("keeps zero-revalidate unstable_cache disabled after an older write completes", async () => {
     const memory = new MemoryCacheHandler();
+    const get = memory.get.bind(memory);
     const set = memory.set.bind(memory);
+    let forceMiss = false;
     let releaseOldWrite = () => {};
     const oldWriteGate = new Promise<void>((resolve) => {
       releaseOldWrite = resolve;
@@ -501,14 +503,23 @@ describe("function cache revalidation", () => {
     const oldWriteStarted = new Promise<void>((resolve) => {
       markOldWriteStarted = resolve;
     });
-    vi.spyOn(memory, "set").mockImplementation(async (key, data, context) => {
-      if (data?.kind === "FETCH" && data.data.body.includes("obsolete")) {
-        markOldWriteStarted();
-        await oldWriteGate;
-      }
-      await set(key, data, context);
+    setCacheHandler({
+      async get(key, context) {
+        if (forceMiss) {
+          forceMiss = false;
+          return null;
+        }
+        return get(key, context);
+      },
+      async set(key, data, context) {
+        if (data?.kind === "FETCH" && data.data.body.includes("obsolete")) {
+          markOldWriteStarted();
+          await oldWriteGate;
+        }
+        await set(key, data, context);
+      },
+      revalidateTag: memory.revalidateTag.bind(memory),
     });
-    setCacheHandler(memory);
     const clock = vi.spyOn(Date, "now").mockReturnValue(100_000);
     let value = "initial";
     const positive = unstable_cache(async () => value, ["zero-supersedes"], { revalidate: 1 });
@@ -516,10 +527,10 @@ describe("function cache revalidation", () => {
       revalidate: 0,
     });
     const pending: Promise<unknown>[] = [];
-    const read = <T>(fn: () => Promise<T>) =>
+    const read = <T>(fn: () => Promise<T>, mode: "background" | "foreground" = "background") =>
       runWithRequestContext(
         createRequestContext({
-          functionCacheRevalidationMode: "background",
+          functionCacheRevalidationMode: mode,
           executionContext: {
             waitUntil(promise) {
               pending.push(promise);
@@ -534,6 +545,9 @@ describe("function cache revalidation", () => {
     value = "obsolete";
     expect(await read(positive)).toBe("initial");
     await oldWriteStarted;
+    value = "current";
+    expect(await read(positive, "foreground")).toBe("current");
+    forceMiss = true;
     expect(await read(disabled)).toBe("uncached");
     releaseOldWrite();
     await Promise.all(pending);
@@ -578,10 +592,10 @@ describe("function cache revalidation", () => {
       return value;
     }, "zero-use-cache-forced-miss");
     const pending: Promise<unknown>[] = [];
-    const read = () =>
+    const read = (mode: "background" | "foreground" = "background") =>
       runWithRequestContext(
         createRequestContext({
-          functionCacheRevalidationMode: "background",
+          functionCacheRevalidationMode: mode,
           executionContext: {
             waitUntil(promise) {
               pending.push(promise);
@@ -597,13 +611,15 @@ describe("function cache revalidation", () => {
     expect(await read()).toBe("initial");
     await oldWriteStarted;
     try {
+      value = "current";
+      expect(await read("foreground")).toBe("current");
       revalidate = 0;
       value = "uncached";
       forceMiss = true;
       expect(await read()).toBe("uncached");
       releaseOldWrite();
       await Promise.all(pending);
-      expect(await memory.get("use-cache:v1:zero-use-cache-forced-miss:[]")).toBeNull();
+      expect(await memory.get("use-cache:zero-use-cache-forced-miss")).toBeNull();
     } finally {
       releaseOldWrite();
       await Promise.allSettled(pending);

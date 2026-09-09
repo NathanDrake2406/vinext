@@ -47,7 +47,7 @@ import { VINEXT_RSC_MARKER_HEADER } from "../server/headers.js";
 import { addCollectedRequestTags, getCurrentFetchSoftTags } from "./fetch-cache.js";
 import {
   type CacheRevalidationLease,
-  hasPendingCacheRevalidation,
+  hasPendingCacheWrites,
   runForegroundCacheRevalidation,
   scheduleBackgroundCacheRevalidation,
 } from "./internal/cache-revalidation.js";
@@ -791,7 +791,7 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
                 rootParamNames && rootParams
                   ? coarseCacheKey + computeRootParamsCacheKeySuffix(rootParams, rootParamNames)
                   : cacheKey;
-              if (existing?.value || hadPendingCacheRevalidation) {
+              if (existing?.value || hadPendingCacheWrites) {
                 const deleteEntry = (key: string) =>
                   lease.write(key, () => handler.set(key, null, { fetchCache: true }));
                 await deleteEntry(finalKey);
@@ -908,7 +908,7 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
           existing = null;
         }
       }
-      const hadPendingCacheRevalidation = hasPendingCacheRevalidation(coordinationKey);
+      const hadPendingCacheWrites = hasPendingCacheWrites(coarseCacheKey);
       const cacheReadAction = decideCacheRead(
         existing?.cacheState,
         // A surrounding cache will persist this result. Resolve stale

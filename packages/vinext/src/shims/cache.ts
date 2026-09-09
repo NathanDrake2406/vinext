@@ -26,7 +26,7 @@ import {
 import { getOrCreateAls } from "./internal/als-registry.js";
 import {
   type CacheRevalidationLease,
-  hasPendingCacheRevalidation,
+  hasPendingCacheWrites,
   runForegroundCacheRevalidation,
   scheduleBackgroundCacheRevalidation,
 } from "./internal/cache-revalidation.js";
@@ -628,7 +628,7 @@ export function unstable_cache<T extends (...args: any[]) => Promise<any>>(
         // A stable key can outlive the configuration that originally cached it.
         // Clear it as a foreground generation so an older pending refresh
         // cannot repopulate this disabled key after the deletion.
-        if (existing?.value || hasPendingCacheRevalidation(cacheKey)) {
+        if (existing?.value || hasPendingCacheWrites(cacheKey)) {
           await runForegroundCacheRevalidation(cacheKey, (lease) =>
             lease.write(cacheKey, () =>
               getDataCacheHandler().set(cacheKey, null, { fetchCache: true }),
