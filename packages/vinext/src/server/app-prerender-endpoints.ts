@@ -32,7 +32,11 @@ type HandleAppPrerenderEndpointOptions = {
   staticParamsMap: AppPrerenderStaticParamsMap;
 };
 
-const JSON_HEADERS = { "content-type": "application/json" };
+const JSON_HEADERS = {
+  "cache-control": "no-store",
+  "content-type": "application/json",
+};
+const NO_STORE_HEADERS = { "cache-control": "no-store" };
 
 export async function handleAppPrerenderEndpoint(
   request: Request,
@@ -59,7 +63,7 @@ async function handleMetadataRoutesEndpoint(
   options: HandleAppPrerenderEndpointOptions,
 ): Promise<Response> {
   if (!isEnabled(options)) {
-    return notFoundResponse();
+    return notFoundResponse({ headers: NO_STORE_HEADERS });
   }
 
   try {
@@ -74,12 +78,12 @@ async function handleStaticParamsEndpoint(
   options: HandleAppPrerenderEndpointOptions,
 ): Promise<Response> {
   if (!isEnabled(options)) {
-    return notFoundResponse();
+    return notFoundResponse({ headers: NO_STORE_HEADERS });
   }
 
   const url = new URL(request.url);
   const pattern = url.searchParams.get("pattern");
-  if (!pattern) return new Response("missing pattern", { status: 400 });
+  if (!pattern) return new Response("missing pattern", { headers: NO_STORE_HEADERS, status: 400 });
 
   const generateStaticParams = options.staticParamsMap[pattern];
   if (typeof generateStaticParams !== "function") {
@@ -94,6 +98,7 @@ async function handleStaticParamsEndpoint(
       pattern,
       rootParamNamesByPattern: options.rootParamNamesByPattern ?? {},
     });
+    if (result === null) return jsonNullResponse();
     return jsonResponse(result);
   } catch (error) {
     return jsonResponse({ error: String(error) }, 500);
@@ -105,12 +110,12 @@ async function handlePagesStaticPathsEndpoint(
   options: HandleAppPrerenderEndpointOptions,
 ): Promise<Response> {
   if (!isEnabled(options)) {
-    return notFoundResponse();
+    return notFoundResponse({ headers: NO_STORE_HEADERS });
   }
 
   const url = new URL(request.url);
   const pattern = url.searchParams.get("pattern");
-  if (!pattern) return new Response("missing pattern", { status: 400 });
+  if (!pattern) return new Response("missing pattern", { headers: NO_STORE_HEADERS, status: 400 });
 
   try {
     const pageRoutes = await options.loadPagesRoutes?.();
@@ -144,10 +149,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 function jsonNullResponse(): Response {
-  return new Response("null", {
-    headers: JSON_HEADERS,
-    status: 200,
-  });
+  return new Response(null, { headers: NO_STORE_HEADERS, status: 204 });
 }
 
 function parseParentParams(raw: string | null): RootParams {

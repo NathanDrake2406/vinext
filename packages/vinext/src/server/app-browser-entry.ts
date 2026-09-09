@@ -183,6 +183,8 @@ import {
 } from "../client/app-nav-failure-handler.js";
 import { createClientReuseManifestHeaderFromVisibleAppState } from "./app-browser-client-reuse-manifest.js";
 import {
+  canonicalizePrewarmableRscRequestHeaders,
+  createCanonicalRscRequestUrl,
   createRscRequestHeaders,
   createRscRequestUrl,
   getVinextRscCompatibilityId,
@@ -202,6 +204,7 @@ import {
   getOptimisticPrefetchSourceKey,
   getOptimisticRouteTemplateKey,
   matchOptimisticRouteManifestRoute,
+  resolveOptimisticNavigationParamsForHref,
   resolveOptimisticNavigationPayload,
   type OptimisticRouteTemplate,
 } from "./app-optimistic-routing.js";
@@ -257,7 +260,14 @@ function toOperationLane(kind: NavigationKind): OperationLane {
 }
 
 const MAX_VISITED_RESPONSE_CACHE_SIZE = 50;
-const CLIENT_RSC_COMPATIBILITY_ID = getVinextRscCompatibilityId();
+const IS_STATIC_EXPORT =
+  process.env.NODE_ENV === "production" && process.env.__NEXT_CONFIG_OUTPUT === "export";
+const CLIENT_DEPLOYMENT_VERSION = process.env.__VINEXT_BUILD_ID ?? null;
+// Static asset hosts cannot attach vinext's compatibility header to `.txt`
+// files. The artifact and client bundle are emitted atomically by one build,
+// so export mode validates the deployment version embedded in the Flight
+// payload before committing it instead.
+const CLIENT_RSC_COMPATIBILITY_ID = IS_STATIC_EXPORT ? null : getVinextRscCompatibilityId();
 const optimisticRouteTemplates = new Map<string, OptimisticRouteTemplate>();
 const optimisticRouteTemplateSources = new Set<string>();
 const optimisticRouteTemplateLearning = new Map<string, Promise<void>>();
@@ -276,6 +286,25 @@ function markInitialAppRouterBootstrapHydrated(): void {
 
 function getBrowserRouteManifest(): RouteManifest | null {
   return getNavigationRuntime()?.bootstrap.routeManifest ?? null;
+}
+
+function resolveStaticExportRouteParams(href: string): Record<string, string | string[]> {
+  const routeManifest = getBrowserRouteManifest();
+  if (routeManifest === null) return {};
+  return (
+    resolveOptimisticNavigationParamsForHref({
+      basePath: __basePath,
+      href,
+      routeManifest,
+    }) ?? {}
+  );
+}
+
+function isStaticExportPayloadDeploymentCompatible(elements: AppElements): boolean {
+  if (!IS_STATIC_EXPORT) return true;
+  const deploymentVersion =
+    AppElementsWire.readMetadata(elements).artifactCompatibility.deploymentVersion;
+  return CLIENT_DEPLOYMENT_VERSION !== null && deploymentVersion === CLIENT_DEPLOYMENT_VERSION;
 }
 
 const MAX_HISTORY_STATE_SNAPSHOTS = 50;
@@ -2091,6 +2120,16 @@ function bootstrapHydration(
           navigationKind,
           targetPathAndSearch,
         });
+        const canUseCanonicalSharedRequest =
+          !IS_STATIC_EXPORT &&
+          process.env.__VINEXT_CANONICAL_RSC_REQUESTS === "1" &&
+          navigationKind === "navigate" &&
+          settledPrefetchedResponse === null &&
+          requestInterceptionContext === null &&
+          mountedSlotsHeader === null &&
+          (rewrittenNavigationHref === null || rewrittenNavigationHref === currentHref);
+        const usesCanonicalPrewarmedRequest =
+          canUseCanonicalSharedRequest && canonicalizePrewarmableRscRequestHeaders(requestHeaders);
         const rscUrl = settledPrefetchedResponse
           ? resolvePrefetchNavigationResponseUrl({
               additionalRscUrls: additionalPrefetchPathAndSearch,
@@ -2098,7 +2137,9 @@ function bootstrapHydration(
               responseUrl: settledPrefetchedResponse.url,
               visibleRscUrl: targetPathAndSearch,
             })
-          : await createRscRequestUrl(targetPathAndSearch, requestHeaders);
+          : usesCanonicalPrewarmedRequest
+            ? createCanonicalRscRequestUrl(targetPathAndSearch)
+            : await createRscRequestUrl(targetPathAndSearch, requestHeaders);
         const additionalPrefetchRscUrls = settledPrefetchedResponse
           ? additionalPrefetchPathAndSearch
           : await Promise.all(
@@ -2388,7 +2429,7 @@ function bootstrapHydration(
           // paths did not satisfy the navigation and a real request is required.
           // Computed from the nav-start router state so it matches the snapshot
           // the request would have carried if produced earlier.
-          if (navigationKind === "navigate") {
+          if (navigationKind === "navigate" && !usesCanonicalPrewarmedRequest) {
             const clientReuseManifestHeader =
               createClientReuseManifestHeaderFromVisibleAppState(navigationInitiationState);
             if (clientReuseManifestHeader !== null) {
@@ -2406,6 +2447,14 @@ function bootstrapHydration(
         if (!browserNavigationController.isCurrentNavigation(navId)) return;
 
         const navContentType = navResponse.headers.get("content-type") ?? "";
+        const isNavigationRscContentType =
+          navContentType.startsWith(VINEXT_RSC_CONTENT_TYPE) ||
+          (IS_STATIC_EXPORT && navContentType.startsWith("text/plain"));
+        // A static host reports the fetched transport URL (`/route/index.txt`),
+        // but that is not a redirect and must never become browser-visible.
+        const navigationResponseUrl = IS_STATIC_EXPORT
+          ? currentHref
+          : (navResponseUrl ?? navResponse.url);
         const streamedRedirectTarget = navResponse.headers.get(VINEXT_RSC_REDIRECT_HEADER);
         const streamedRedirectTypeHeader = navResponse.headers.get(VINEXT_RSC_REDIRECT_TYPE_HEADER);
         const streamedRedirectType =
@@ -2421,12 +2470,12 @@ function bootstrapHydration(
           currentHref,
           effectiveHistoryUpdateMode: currentHistoryMode ?? "replace",
           hasBody: navResponse.body !== null,
-          isRscContentType: navContentType.startsWith(VINEXT_RSC_CONTENT_TYPE),
+          isRscContentType: isNavigationRscContentType,
           origin: window.location.origin,
           redirectDepth: redirectCount,
           requestPreviousNextUrl,
           responseOk: navResponse.ok,
-          responseUrl: navResponseUrl ?? navResponse.url,
+          responseUrl: navigationResponseUrl,
           source: "live",
           streamedRedirectTarget,
           streamedRedirectType,
@@ -2477,10 +2526,11 @@ function bootstrapHydration(
         }
 
         // navParams falls back to {} on a missing or malformed header.
+        const responseParams = parseEncodedJsonHeader<Record<string, string | string[]>>(
+          navResponse.headers.get(VINEXT_PARAMS_HEADER),
+        );
         const navParams: Record<string, string | string[]> =
-          parseEncodedJsonHeader<Record<string, string | string[]>>(
-            navResponse.headers.get(VINEXT_PARAMS_HEADER),
-          ) ?? {};
+          responseParams ?? (IS_STATIC_EXPORT ? resolveStaticExportRouteParams(currentHref) : {});
         // Build snapshot from local params, not latestClientParams
         const navigationSnapshot = createClientNavigationRenderSnapshot(currentHref, navParams);
 
@@ -2548,6 +2598,20 @@ function bootstrapHydration(
             signal: navigationAbortHandle.signal,
             supplemental,
           }).then(requireCompleteSupplementalRefresh);
+        }
+
+        // Static hosts cannot supply the compatibility response header used by
+        // server navigation. Match Next.js's export skew protection by checking
+        // the build identity carried in the decoded Flight model before React
+        // can commit a mixed-deployment tree.
+        if (IS_STATIC_EXPORT) {
+          const staticExportElements = await rscPayload;
+          if (!browserNavigationController.isCurrentNavigation(navId)) return;
+          if (!isStaticExportPayloadDeploymentCompatible(staticExportElements)) {
+            performHardNavigationForScrollIntent(currentHref);
+            return;
+          }
+          rscPayload = Promise.resolve(staticExportElements);
         }
 
         if (!browserNavigationController.isCurrentNavigation(navId)) return;
@@ -2626,7 +2690,11 @@ function bootstrapHydration(
           // absent from both caches and an explicit prefetch refetches it.
           const responseSnapshot =
             consumedPrefetchSnapshot ??
-            createCachedRscResponseSnapshot(navResponse, await cacheBufferPromise, navResponseUrl);
+            createCachedRscResponseSnapshot(
+              navResponse,
+              await cacheBufferPromise,
+              navigationResponseUrl,
+            );
           const completedResponseResolvedDynamic =
             responseSnapshot.completedDynamicStaleTimeSeconds !== undefined;
           const cacheRestorable =

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 import { VINEXT_RSC_VARY_HEADER } from "../packages/vinext/src/server/app-rsc-cache-busting.js";
 import {
   finalizeAppRscResponse,
@@ -9,6 +9,21 @@ import {
   markEdgeRouteHandlerLinkHeaders,
   markFrameworkLinkHeaders,
 } from "../packages/vinext/src/server/app-response-header-provenance.js";
+import {
+  DefaultCdnCacheAdapter,
+  setCdnCacheAdapter,
+  type CdnCacheAdapter,
+  type CdnResponseHeaders,
+} from "../packages/vinext/src/shims/cdn-cache.js";
+import { createStaticFileSignal } from "../packages/vinext/src/server/request-pipeline.js";
+import { createWorkerCacheabilityAdmissionContext } from "../packages/vinext/src/server/cacheability-request.js";
+import {
+  CACHEABILITY_REQUEST_STATE,
+  type RouteCacheabilityState,
+} from "../packages/vinext/src/shims/cacheability-classification.js";
+import { runWithExecutionContext } from "../packages/vinext/src/shims/request-context.js";
+
+afterEach(() => setCdnCacheAdapter(new DefaultCdnCacheAdapter()));
 
 function makeRequestContext(headers: Headers = new Headers()): RequestContext {
   return {
@@ -22,6 +37,120 @@ function makeRequestContext(headers: Headers = new Headers()): RequestContext {
 // ── config headers applied to non-redirect responses ────────────────────
 
 describe("finalizeAppRscResponse — config header application", () => {
+  it.each(["no-cache", "private, no-cache, no-store, max-age=0, must-revalidate"])(
+    "preserves an existing generic non-cacheable policy: %s",
+    async (cacheControl) => {
+      const response = new Response("body", {
+        headers: { "Cache-Control": cacheControl },
+      });
+
+      await finalizeAppRscResponse(response, new Request("http://example.com/about"), {
+        basePath: "",
+        configHeaders: [],
+        i18nConfig: null,
+        requestContext: makeRequestContext(),
+      });
+
+      expect(response.headers.get("cache-control")).toBe(cacheControl);
+    },
+  );
+
+  it("does not collapse field-qualified cache directives to no-store", async () => {
+    const cacheControl = 'public, max-age=60, private="set-cookie", no-cache="set-cookie"';
+    const response = new Response("body", { headers: { "Cache-Control": cacheControl } });
+
+    await finalizeAppRscResponse(response, new Request("http://example.com/about"), {
+      basePath: "",
+      configHeaders: [],
+      i18nConfig: null,
+      requestContext: makeRequestContext(),
+    });
+
+    expect(response.headers.get("cache-control")).toBe(cacheControl);
+  });
+
+  it("normalizes an adapter-owned cache opt-out after response headers are finalized", async () => {
+    const adapter: CdnCacheAdapter = {
+      ownsBackgroundRevalidation: false,
+      async get() {
+        return null;
+      },
+      async set() {},
+      buildResponseHeaders({ cacheControl }): CdnResponseHeaders {
+        return cacheControl ? { "Cache-Control": cacheControl, "X-Example-Edge-Policy": null } : {};
+      },
+      responsePolicy: {
+        isHeader: (name) => name.toLowerCase() === "x-example-edge-policy",
+        readCacheControl: (headers) =>
+          headers.get("X-Example-Edge-Policy") ?? headers.get("Cache-Control"),
+        hasExplicitNonCacheablePolicy(headers) {
+          return headers.get("X-Example-Edge-Policy") === "no-store";
+        },
+      },
+      async revalidateTag() {},
+    };
+    setCdnCacheAdapter(adapter);
+    const response = new Response("body", {
+      headers: { "X-Example-Edge-Policy": "no-store" },
+    });
+
+    await finalizeAppRscResponse(response, new Request("http://example.com/about"), {
+      basePath: "",
+      configHeaders: [],
+      i18nConfig: null,
+      requestContext: makeRequestContext(),
+    });
+
+    expect(response.headers.get("cache-control")).toBe("no-store, must-revalidate");
+    expect(response.headers.get("x-example-edge-policy")).toBeNull();
+  });
+
+  it("records the adapter's provisional policy before config headers run", async () => {
+    const adapter: CdnCacheAdapter = {
+      ownsBackgroundRevalidation: true,
+      async get() {
+        return null;
+      },
+      async set() {},
+      buildResponseHeaders({ cacheControl }): CdnResponseHeaders {
+        return { "Cache-Control": cacheControl || "no-store" };
+      },
+      async revalidateTag() {},
+    };
+    setCdnCacheAdapter(adapter);
+    const request = new Request("http://example.com/about", {
+      headers: { Accept: "text/html" },
+    });
+    const executionContext = createWorkerCacheabilityAdmissionContext(
+      { waitUntil() {} },
+      request,
+      null,
+      "build-a",
+      true,
+    );
+
+    await runWithExecutionContext(executionContext, () =>
+      finalizeAppRscResponse(new Response("body"), request, {
+        basePath: "",
+        configHeaders: [
+          {
+            source: "/about",
+            headers: [{ key: "Cache-Control", value: "private, no-store" }],
+          },
+        ],
+        i18nConfig: null,
+        requestContext: makeRequestContext(),
+      }),
+    );
+
+    const state = Reflect.get(
+      executionContext,
+      CACHEABILITY_REQUEST_STATE,
+    ) as RouteCacheabilityState;
+    expect([...state.frameworkResponseCachePolicy!]).toEqual([["cache-control", "no-store"]]);
+    expect(state.finalResponseVetoReason).toContain("next.config headers set a non-cacheable");
+  });
+
   it("applies a matching config header to a 200 response", async () => {
     // Behavior: /about page response gets x-added header from next.config.js headers[].
     // Regression: expected null to be "config"
@@ -314,6 +443,35 @@ describe("finalizeAppRscResponse — config header application", () => {
 // ── App Router RSC vary header ──────────────────────────────────────────
 
 describe("finalizeAppRscResponse — App Router RSC vary header", () => {
+  it("does not let an untrusted static-file header suppress the RSC vary contract", async () => {
+    const response = new Response("route handler body", {
+      headers: { "x-vinext-static-file": "/private.txt" },
+    });
+
+    await finalizeAppRscResponse(response, new Request("http://example.com/api/reflect"), {
+      basePath: "",
+      configHeaders: [],
+      i18nConfig: null,
+      requestContext: makeRequestContext(),
+    });
+
+    expect(response.headers.get("x-vinext-static-file")).toBe("/private.txt");
+    expect(response.headers.get("vary")).toBe(VINEXT_RSC_VARY_HEADER);
+  });
+
+  it("keeps the RSC vary header off a framework-created static-file signal", async () => {
+    const response = createStaticFileSignal("/public.txt", { headers: null, status: null });
+
+    await finalizeAppRscResponse(response, new Request("http://example.com/public.txt"), {
+      basePath: "",
+      configHeaders: [],
+      i18nConfig: null,
+      requestContext: makeRequestContext(),
+    });
+
+    expect(response.headers.get("vary")).toBeNull();
+  });
+
   it("preserves custom Vary values while appending the internal RSC vary key", async () => {
     const response = new Response("body", { status: 200, headers: { Vary: "User-Agent" } });
     const request = new Request("http://example.com/normal");

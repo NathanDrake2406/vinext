@@ -24,6 +24,7 @@ import {
   type RenderPageEnhancers,
   runDocumentRenderPage,
 } from "./pages-document-initial-props.js";
+import { markPagesPrerenderSharedCacheBypass } from "./pages-data-export-compatibility.js";
 import { fnv1a52 } from "../utils/hash.js";
 import { readStreamAsText } from "../utils/text-stream.js";
 import { callDocumentGetInitialProps } from "./document-initial-head.js";
@@ -33,7 +34,7 @@ import {
   extractDocumentAssetProps,
 } from "./pages-document-asset-props.js";
 import { isBotUserAgent } from "../utils/html-limited-bots.js";
-import { NEXTJS_CACHE_HEADER } from "./headers.js";
+import { NEXTJS_CACHE_HEADER, VINEXT_REVALIDATED_CACHE_TAG_HEADER } from "./headers.js";
 import { matchesIfNoneMatch } from "./http-conditional.js";
 
 // ---------------------------------------------------------------------------
@@ -566,6 +567,7 @@ export async function renderPagesPageResponse(
     const response = await options.documentReqRes.responsePromise;
     if (options.bypassSharedCache) {
       applyCdnResponseHeaders(response.headers, { cacheControl: ISR_NEVER_CACHE_CONTROL });
+      markPagesPrerenderSharedCacheBypass(response.headers);
     }
     return response;
   }
@@ -707,6 +709,7 @@ export async function renderPagesPageResponse(
     // Checked before the nonce branch: request-derived props need the adapter
     // so provider-owned edge headers set by App.getInitialProps are cleared.
     applyCdnResponseHeaders(responseHeaders, { cacheControl: ISR_NEVER_CACHE_CONTROL });
+    markPagesPrerenderSharedCacheBypass(responseHeaders);
   } else if (options.scriptNonce) {
     responseHeaders.set("Cache-Control", ISR_NO_STORE_CACHE_CONTROL);
   } else if (options.isrRevalidateSeconds !== null) {
@@ -720,6 +723,10 @@ export async function renderPagesPageResponse(
     });
     if (options.isOnDemandRevalidate) {
       responseHeaders.set(NEXTJS_CACHE_HEADER, "REVALIDATED");
+      responseHeaders.set(
+        VINEXT_REVALIDATED_CACHE_TAG_HEADER,
+        encodeCacheTag(`_N_T_${stem || "/"}`),
+      );
     } else {
       setCacheStateHeaders(responseHeaders, "MISS");
     }

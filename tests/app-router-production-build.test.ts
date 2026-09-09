@@ -132,6 +132,8 @@ describe("App Router Production build", () => {
     expect(fs.existsSync(buildIdPath)).toBe(true);
     const buildId = fs.readFileSync(buildIdPath, "utf-8").trim();
     expect(buildId.length).toBeGreaterThan(0);
+    const rscBuildId = fs.readFileSync(path.join(outDir, "server", "RSC_BUILD_ID"), "utf-8").trim();
+    expect(rscBuildId).toMatch(/^[0-9a-f]{32}$/);
 
     const warmupManifestPath = path.join(outDir, "server", "vinext-prerender-paths.json");
     expect(fs.existsSync(warmupManifestPath)).toBe(false);
@@ -210,6 +212,33 @@ describe("App Router Production build", () => {
     } finally {
       if (previous === undefined) delete process.env.__VINEXT_SHARED_BUILD_ID;
       else process.env.__VINEXT_SHARED_BUILD_ID = previous;
+    }
+  }, 30000);
+
+  it("adopts the shared prerender discovery secret in the Worker and server manifest", async () => {
+    // Hybrid builds instantiate vinext twice; the CLI-provided value must win
+    // so the later Pages build cannot invalidate the App Worker's capability.
+    const sharedSecret = "ab".repeat(32);
+    const previous = process.env.__VINEXT_SHARED_PRERENDER_SECRET;
+    process.env.__VINEXT_SHARED_PRERENDER_SECRET = sharedSecret;
+    try {
+      const builder = await createBuilder({
+        root: APP_FIXTURE_DIR,
+        configFile: false,
+        plugins: [vinext({ appDir: APP_FIXTURE_DIR })],
+        logLevel: "silent",
+      });
+      await builder.buildApp();
+
+      expect(
+        JSON.parse(fs.readFileSync(path.join(outDir, "server", "vinext-server.json"), "utf-8")),
+      ).toEqual({ prerenderSecret: sharedSecret });
+      expect(fs.readFileSync(path.join(outDir, "server", "index.js"), "utf-8")).toContain(
+        sharedSecret,
+      );
+    } finally {
+      if (previous === undefined) delete process.env.__VINEXT_SHARED_PRERENDER_SECRET;
+      else process.env.__VINEXT_SHARED_PRERENDER_SECRET = previous;
     }
   }, 30000);
 

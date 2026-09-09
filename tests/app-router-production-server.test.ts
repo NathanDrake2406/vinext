@@ -754,7 +754,7 @@ describe("App Router Production server (startProdServer)", () => {
     const html = await res.text();
     const dynamicScriptPreloads =
       html.match(
-        /<link\b(?=[^>]*\brel="preload")(?=[^>]*\bas="script")(?=[^>]*\bhref="[^"]*\/_next\/static\/chunks\/[^"]*\.js")[^>]*>/g,
+        /<link\b(?=[^>]*\brel="modulepreload")(?=[^>]*\bas="script")(?=[^>]*\bfetchpriority="low")(?=[^>]*\bhref="[^"]*\/_next\/static\/chunks\/[^"]*\.js")[^>]*>/gi,
       ) ?? [];
 
     expect(dynamicScriptPreloads.length).toBeGreaterThan(0);
@@ -793,7 +793,7 @@ describe("App Router Production server (startProdServer)", () => {
 
     const dynamicScriptPreloads =
       html.match(
-        /<link\b(?=[^>]*\brel="preload")(?=[^>]*\bas="script")(?=[^>]*\bhref="[^"]*\/_next\/static\/chunks\/[^"]*\.js")[^>]*>/g,
+        /<link\b(?=[^>]*\brel="modulepreload")(?=[^>]*\bas="script")(?=[^>]*\bfetchpriority="low")(?=[^>]*\bhref="[^"]*\/_next\/static\/chunks\/[^"]*\.js")[^>]*>/gi,
       ) ?? [];
 
     // Parity expectation: a Server-Component call site must still emit a
@@ -837,7 +837,7 @@ describe("App Router Production server (startProdServer)", () => {
     const html = await res.text();
     const dynamicScriptPreloads =
       html.match(
-        /<link\b(?=[^>]*\brel="preload")(?=[^>]*\bas="script")(?=[^>]*\bhref="[^"]*\/_next\/static\/chunks\/[^"]*\.js")[^>]*>/g,
+        /<link\b(?=[^>]*\brel="modulepreload")(?=[^>]*\bas="script")(?=[^>]*\bfetchpriority="low")(?=[^>]*\bhref="[^"]*\/_next\/static\/chunks\/[^"]*\.js")[^>]*>/gi,
       ) ?? [];
 
     expect(dynamicScriptPreloads.length).toBeGreaterThan(0);
@@ -863,7 +863,7 @@ describe("App Router Production server (startProdServer)", () => {
     // empty render.
     expect(html).toContain("This is static content");
 
-    // The DynamicPreloadChunks signature is rel="preload" as="script"
+    // The DynamicPreloadChunks signature is rel="modulepreload" as="script"
     // fetchPriority="low" — route bootstrap uses modulepreload instead, so this
     // matches only dynamic-boundary preloads. Match the attribute name
     // case-INSENSITIVELY: React currently serializes the `fetchPriority` prop
@@ -872,7 +872,7 @@ describe("App Router Production server (startProdServer)", () => {
     // would pass vacuously even if a preload leaked.
     const dynamicScriptPreloads = (html.match(/<link\b[^>]*>/g) ?? []).filter(
       (tag) =>
-        /\brel="preload"/i.test(tag) &&
+        /\brel="modulepreload"/i.test(tag) &&
         /\bas="script"/i.test(tag) &&
         /\bfetchpriority="low"/i.test(tag),
     );
@@ -952,7 +952,7 @@ describe("App Router Production server (startProdServer)", () => {
       );
 
       const html = await res.text();
-      // DynamicPreloadChunks emits ReactDOM.preload(..., { fetchPriority: "low" });
+      // DynamicPreloadChunks marks its modulepreload with fetchPriority="low";
       // use that signal to avoid matching route bootstrap modulepreload links.
       const dynamicScriptPreloads = (html.match(/<link\b[^>]*>/g) ?? []).filter(
         (tag) =>
@@ -1225,6 +1225,25 @@ describe("App Router Production server (startProdServer)", () => {
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json).toHaveProperty("message");
+  });
+
+  it("does not treat a route handler's reflected static-file header as a framework signal", async () => {
+    const direct = await fetch(`${baseUrl}/internal-header-secret.txt`);
+    expect(direct.status).toBe(403);
+    await expect(direct.text()).resolves.toBe("blocked by middleware");
+
+    const reflected = await fetch(`${baseUrl}/api/reflect-static-file-header`, {
+      headers: { "x-vinext-static-file": "/internal-header-secret.txt" },
+    });
+    expect(reflected.status).toBe(200);
+    expect(reflected.headers.get("x-vinext-static-file")).toBe("/internal-header-secret.txt");
+    expect(reflected.headers.get("vary")).toContain("RSC");
+    await expect(reflected.text()).resolves.toBe("route handler body");
+
+    const collision = await fetch(`${baseUrl}/static-file-header-collision.txt`);
+    expect(collision.status).toBe(200);
+    expect(collision.headers.get("x-vinext-static-file")).toBe("/internal-header-secret.txt");
+    await expect(collision.text()).resolves.toBe("STATIC_FILE_HEADER_COLLISION_SAFE\n");
   });
 
   it("preserves config Link headers alongside React preload links", async () => {

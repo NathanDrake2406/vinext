@@ -517,6 +517,7 @@ These are deployed to Cloudflare Workers and updated on every push to `main`:
 | Nextra Docs            | Nextra docs site (MDX, App Router)                                                                               | [nextra-docs-template.vinext.workers.dev](https://nextra-docs-template.vinext.workers.dev)       |
 | App Router (minimal)   | Minimal App Router on Workers                                                                                    | [app-router-cloudflare.vinext.workers.dev](https://app-router-cloudflare.vinext.workers.dev)     |
 | Pages Router (minimal) | Minimal Pages Router on Workers                                                                                  | [pages-router-cloudflare.vinext.workers.dev](https://pages-router-cloudflare.vinext.workers.dev) |
+| Static export          | [Hybrid App/Pages Router site](examples/static-export) served as assets only                                     | [static-export.vinext.workers.dev](https://static-export.vinext.workers.dev)                     |
 | RealWorld API          | REST API routes example                                                                                          | [realworld-api-rest.vinext.workers.dev](https://realworld-api-rest.vinext.workers.dev)           |
 | Benchmarks Dashboard   | Build performance tracking over time (D1-backed)                                                                 | [vinext.dev/benchmarks](https://vinext.dev/benchmarks)                                           |
 | App Router + Nitro     | App Router deployed via Nitro (multi-platform)                                                                   | [examples/app-router-nitro](examples/app-router-nitro)                                           |
@@ -702,19 +703,37 @@ The KV data adapter reads `env[binding]` at runtime, so add the matching KV name
 }
 ```
 
-`binding` defaults to `VINEXT_KV_CACHE`, so `kvDataAdapter()` with no options works as long as that's your binding name. Other options: `appPrefix` (namespace cache keys to isolate multiple apps in one KV namespace), `ttlSeconds` (default KV `expirationTtl`, default 30 days), and `tagCacheTtlMs` (in-memory tag-invalidation cache TTL, default 5s).
+`binding` defaults to `VINEXT_KV_CACHE`, so `kvDataAdapter()` with no options works as long as that's your binding name. Other options: `appPrefix` (namespace cache keys to isolate multiple apps in one KV namespace), `ttlSeconds` (default KV `expirationTtl`, default 30 days), `tagCacheTtlMs` (in-memory tag-invalidation cache TTL, default 5s), and `entryCacheTtlSeconds` (optional KV edge-cache TTL for entry reads; tag markers keep KV's default).
 
-`cdnAdapter()` takes no options, but the Workers Cache only exposes `ctx.cache` when `cache.enabled` is set in `wrangler.jsonc`:
+When `cdnAdapter()` is used in a Cloudflare build, vinext emits two Worker
+entrypoints and configures Workers Cache only on the response entrypoint. The
+default entrypoint keeps caching disabled so middleware and request-time routing
+run on every request. Do not enable Workers Cache on the default entrypoint in
+your source `wrangler.jsonc`; the generated `dist/server/wrangler.json` contains
+the per-entrypoint cache settings and version metadata binding used for staged
+discovery and warming.
 
-```jsonc
-{
-  "cache": { "enabled": true },
-}
-```
+The generated version metadata binding lets staged discovery and warming verify
+the uploaded Worker version. Pass `versionMetadataBinding` to `cdnAdapter()`
+only when the deployment needs a custom binding name.
+
+`vinext-cloudflare deploy --experimental-warm-cdn-cache` performs the two-stage
+upload and makes one final cache-fill request per admitted identity by default.
+Add `--warm-cdn-certify` only to opt into a second, header-only request that
+must prove every planned entry reusable before promotion.
 
 While the data adapter can store entries and serve HIT/STALE itself, the CDN adapter delegates serving to Cloudflare's edge: the origin renders fresh responses and tags them with `Cache-Tag`, and `revalidateTag()` / `revalidatePath()` purge the edge through `ctx.cache.purge({ tags })`. See [examples/workers-cache](examples/workers-cache) for both adapters wired up together.
 
-Each builder returns a plain, serializable `{ adapter, options }` descriptor — **it never touches the Workers runtime**, so nothing throws at build or dev time when bindings aren't available. The actual adapter (and its `env` binding lookup) is instantiated lazily on the first request.
+The response entrypoint adds a transport-only digest of the complete stage
+identity to its Workers Cache URL. That internal key is independent of zone
+Cache Rules and prevents distinct query, representation, rewrite, or
+interception identities from colliding.
+
+Adapter declarations do not access the Workers runtime, so nothing throws at
+config-evaluation or dev time when bindings are unavailable. Builders may also
+provide platform-specific output hooks; `cdnAdapter()` uses one to configure
+the Cloudflare entrypoints after the application build. Runtime adapters (and
+their `env` binding lookups) are instantiated lazily on the first request.
 
 Registration is wired into **every router and runtime** — App Router and Pages Router, on Cloudflare Workers as well as the Node.js server (`vinext start`) and dev. It self-guards (instantiated once per isolate) and is resilient: if an adapter can't initialize on a given runtime (e.g. a KV binding doesn't exist on the Node server), vinext logs a warning and falls back to the default handler instead of failing requests.
 

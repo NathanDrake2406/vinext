@@ -29,7 +29,10 @@ import {
   mergePagesNotFoundSourceHeaders,
   resolvePagesPageData,
 } from "./pages-page-data.js";
-import { PagesDataExportCompatibilityError } from "./pages-data-export-compatibility.js";
+import {
+  markPagesPrerenderSharedCacheBypass,
+  PagesDataExportCompatibilityError,
+} from "./pages-data-export-compatibility.js";
 import type { PagesPageModule } from "./pages-page-data.js";
 import { resolvePagesPageMethodResponse } from "./pages-page-method.js";
 import { renderPagesPageResponse } from "./pages-page-response.js";
@@ -38,6 +41,7 @@ import type { PagesI18nRenderContext } from "./pages-page-response.js";
 import type { RenderPageEnhancers } from "./pages-document-initial-props.js";
 import {
   BROWSER_REVALIDATE_CACHE_CONTROL,
+  STATIC_CACHE_CONTROL,
   applyCdnResponseHeaders,
   hasExplicitNonCacheableResponsePolicy,
   shouldUseNextDeployCacheControl,
@@ -65,16 +69,24 @@ import {
   closeAfterResponse,
   closeAfterResponseWithBody,
   createRequestContext,
+  preserveFullyBufferedBodyMetadata,
   runWithRequestContext,
 } from "vinext/shims/unified-request-context";
 import { getRequestExecutionContext } from "vinext/shims/request-context";
 import { ensureFetchPatch } from "vinext/shims/fetch-cache";
+import {
+  beginRouteCacheability,
+  isRouteCacheabilityIdentityProbe,
+  isRouteCacheabilityProbe,
+  recordRouteCacheability,
+} from "vinext/shims/cacheability-classification";
 import { collectAssetTags, resolveClientModuleUrl } from "./pages-asset-tags.js";
 import {
   NEXTJS_CACHE_HEADER,
   NEXTJS_DEPLOYMENT_ID_HEADER,
   VINEXT_CACHE_HEADER,
   VINEXT_PRERENDER_RENDER_ERROR_HEADER,
+  VINEXT_REVALIDATED_CACHE_TAG_HEADER,
 } from "./headers.js";
 import { buildMissIsrCacheControl, ISR_NEVER_CACHE_CONTROL } from "./isr-decision.js";
 import { encodeCacheTag } from "../utils/encode-cache-tag.js";
@@ -84,31 +96,58 @@ import {
   type PagesGetInitialPropsRouter,
 } from "./pages-get-initial-props.js";
 
+type PagesStreamedHtmlResponse = Response & {
+  __vinextStreamedHtmlResponse?: boolean;
+};
+
+function preservePagesBodyMetadata(source: Response, target: Response): Response {
+  const result = preserveFullyBufferedBodyMetadata(source, target) as PagesStreamedHtmlResponse;
+  if ((source as PagesStreamedHtmlResponse).__vinextStreamedHtmlResponse === true) {
+    result.__vinextStreamedHtmlResponse = true;
+  }
+  return result;
+}
+
 export function finalizePagesPreviewResponse(
   response: Response,
   preview: PagesPreviewState,
 ): Response {
   if (preview.data === false && !preview.shouldClear) return response;
   const headers = new Headers(response.headers);
-  if (preview.data !== false) {
+  // Next.js expires stale preview cookies but only applies this policy while
+  // draft mode remains active. Keep the cleanup response private as a stricter
+  // edge-cache safeguard: otherwise a shared cache can replay Set-Cookie and
+  // the ordinary ISR body selected after the invalid cookie was rejected.
+  if (preview.data !== false || preview.shouldClear) {
     applyCdnResponseHeaders(headers, { cacheControl: PAGES_PREVIEW_CACHE_CONTROL });
   }
   if (preview.shouldClear) appendPagesPreviewClearCookies(headers);
-  return new Response(response.body, {
-    headers,
-    status: response.status,
-    statusText: response.statusText,
-  });
+  return preservePagesBodyMetadata(
+    response,
+    new Response(response.body, {
+      headers,
+      status: response.status,
+      statusText: response.statusText,
+    }),
+  );
 }
 
 function withPagesCacheState(
   response: Response,
   state: "MISS" | "HIT" | "STALE" | "REVALIDATED",
+  revalidatedPathname?: string,
 ): Response {
   const headers = new Headers(response.headers);
   if (state === "REVALIDATED") {
     headers.set(NEXTJS_CACHE_HEADER, state);
     headers.delete(VINEXT_CACHE_HEADER);
+    if (revalidatedPathname !== undefined) {
+      const stem =
+        revalidatedPathname.length > 1 && revalidatedPathname.endsWith("/")
+          ? revalidatedPathname.slice(0, -1)
+          : revalidatedPathname;
+      headers.set(VINEXT_REVALIDATED_CACHE_TAG_HEADER, encodeCacheTag(`_N_T_${stem || "/"}`));
+    }
   } else {
     setCacheStateHeaders(headers, state);
   }
@@ -368,6 +407,7 @@ export function createPagesPageHandler(
   manifest: Record<string, string[]> | null | undefined,
   middlewareHeaders: Headers | null | undefined,
   options: RenderPageOptions | null | undefined,
+  initialResponseHeaders?: Headers,
 ) => Promise<Response> {
   const {
     pageRoutes,
@@ -434,6 +474,7 @@ export function createPagesPageHandler(
     manifest: Record<string, string[]> | null | undefined,
     middlewareHeaders: Headers | null | undefined,
     options: RenderPageOptions | null | undefined,
+    initialResponseHeaders?: Headers,
   ): Promise<Response> {
     let isDataReq = !!(options && options.isDataReq);
     const requestUrl = new URL(request.url);
@@ -564,6 +605,34 @@ export function createPagesPageHandler(
     const isStaticPropsRoute = typeof pageModule.getStaticProps === "function";
     const requestAwareStaticPropsRoute =
       isStaticPropsRoute && hasCustomAppGetInitialProps(AppComponent);
+    const pagesReadiness = buildPagesReadinessNextData({
+      pageModule,
+      appComponent: AppComponent as { getInitialProps?: unknown; origGetInitialProps?: unknown },
+      hasRewrites,
+    });
+    const isCacheabilityProbe = isRouteCacheabilityProbe();
+    const isTopLevelPageRoute = !isRouteMissErrorRender && options?.__forcedRoute === undefined;
+    if (isTopLevelPageRoute) {
+      beginRouteCacheability("pages-page", route.pattern);
+      if (isRouteCacheabilityIdentityProbe()) {
+        return new Response(null, { status: 204 });
+      }
+      if (
+        pagesReadiness.gssp !== true &&
+        pagesReadiness.gip !== true &&
+        !(pagesReadiness.appGip === true && !isStaticPropsRoute) &&
+        !isStaticPropsRoute
+      ) {
+        // Automatic Static Optimization is the Pages Router equivalent of a
+        // `getStaticProps` page with no revalidation window. It has no origin
+        // ISR entry to copy policy from, so carry Next.js's static policy into
+        // the probe/admission result explicitly.
+        recordRouteCacheability({ cacheable: true, cacheControl: STATIC_CACHE_CONTROL });
+      }
+    }
+
+    const routeIsrGet = isCacheabilityProbe ? async () => null : isrGet;
+    const routeIsrSet = isCacheabilityProbe ? async () => {} : isrSet;
     const isStaticPropsRender =
       isStaticPropsRoute && typeof pageModule.getServerSideProps !== "function";
     const shouldCoalesceOnDemand =
@@ -574,10 +643,17 @@ export function createPagesPageHandler(
     if (shouldCoalesceOnDemand) {
       const cacheKey = pageIsrCacheKey("pages", routeUrl.split("?")[0]);
       const snapshot = await coalesceOnDemandRevalidation(cacheKey, async () => {
-        const response = await renderPage(request, url, manifest, middlewareHeaders, {
-          ...options,
-          __skipOnDemandCoalesce: true,
-        });
+        const response = await renderPage(
+          request,
+          url,
+          manifest,
+          middlewareHeaders,
+          {
+            ...options,
+            __skipOnDemandCoalesce: true,
+          },
+          initialResponseHeaders,
+        );
         return {
           body:
             request.method === "HEAD" || response.status === 204 || response.status === 304
@@ -658,11 +734,7 @@ export function createPagesPageHandler(
           : ({ data: false, shouldClear: false } satisfies PagesPreviewState);
         const previewData = preview.data;
         const pagesNextData = {
-          ...buildPagesReadinessNextData({
-            pageModule,
-            appComponent: AppComponent as { getInitialProps?: unknown } | null,
-            hasRewrites,
-          }),
+          ...pagesReadiness,
           ...(previewData === false ? {} : { isPreview: true as const }),
         };
         // Match Next.js's ServerRouter: SSG renders are not ready on the
@@ -786,6 +858,7 @@ export function createPagesPageHandler(
         const createPageReqRes = () => {
           const reqRes = createPagesReqRes({
             body: undefined,
+            initialResponseHeaders,
             query,
             request,
             url: originalRequestPathAndSearch,
@@ -821,8 +894,8 @@ export function createPagesPageHandler(
           fontLinkHeader,
           i18n: buildI18nRenderContext(i18nConfig, locale, currentDefaultLocale, domainLocales),
           isrCacheKey: pageIsrCacheKey,
-          isrGet,
-          isrSet,
+          isrGet: routeIsrGet,
+          isrSet: routeIsrSet,
           expireSeconds: vinextConfig.expireTime,
           isBuildTimePrerendering:
             typeof process !== "undefined" && process.env && process.env.VINEXT_PRERENDER === "1",
@@ -896,16 +969,23 @@ export function createPagesPageHandler(
           const notFoundRoute = findNotFoundRoute();
           let notFoundResponse: Response;
           if (notFoundRoute && routePattern !== "/404" && routePattern !== "/_error") {
-            notFoundResponse = await renderPage(request, url, manifest, middlewareHeaders, {
-              statusCode: 404,
-              asPath: routerAsPath,
-              renderErrorPageOnMiss: false,
-              __forcedRoute: notFoundRoute,
-              __notFoundRevalidateSeconds: pageDataResult.revalidateSeconds,
-              __notFoundExpireSeconds: pageDataResult.expireSeconds,
-              __notFoundCachePathname: isrCachePathname,
-              __notFoundSourceHeaders: pageDataResult.responseHeaders,
-            });
+            notFoundResponse = await renderPage(
+              request,
+              url,
+              manifest,
+              middlewareHeaders,
+              {
+                statusCode: 404,
+                asPath: routerAsPath,
+                renderErrorPageOnMiss: false,
+                __forcedRoute: notFoundRoute,
+                __notFoundRevalidateSeconds: pageDataResult.revalidateSeconds,
+                __notFoundExpireSeconds: pageDataResult.expireSeconds,
+                __notFoundCachePathname: isrCachePathname,
+                __notFoundSourceHeaders: pageDataResult.responseHeaders,
+              },
+              initialResponseHeaders,
+            );
           } else {
             notFoundResponse = mergePagesNotFoundSourceHeaders(
               buildDefaultPagesNotFoundResponse(),
@@ -917,10 +997,15 @@ export function createPagesPageHandler(
             applyCdnResponseHeaders(notFoundResponse.headers, {
               cacheControl: ISR_NEVER_CACHE_CONTROL,
             });
+            markPagesPrerenderSharedCacheBypass(notFoundResponse.headers);
           }
 
           if (isOnDemandRevalidate) {
-            notFoundResponse = withPagesCacheState(notFoundResponse, "REVALIDATED");
+            notFoundResponse = withPagesCacheState(
+              notFoundResponse,
+              "REVALIDATED",
+              isrCachePathname,
+            );
           } else if (pageDataResult.cacheState) {
             notFoundResponse = withPagesCacheState(notFoundResponse, pageDataResult.cacheState);
           }
@@ -929,7 +1014,7 @@ export function createPagesPageHandler(
         if (pageDataResult.kind === "response") {
           let response =
             isOnDemandRevalidate && pageDataResult.onDemandRevalidateSuccess !== false
-              ? withPagesCacheState(pageDataResult.response, "REVALIDATED")
+              ? withPagesCacheState(pageDataResult.response, "REVALIDATED", isrCachePathname)
               : pageDataResult.response;
           if (shouldApplyErrorResponsePolicy) {
             response = applyPagesErrorCachePolicy(
@@ -941,6 +1026,7 @@ export function createPagesPageHandler(
           }
           if (options?.__bypassSharedCache) {
             applyCdnResponseHeaders(response.headers, { cacheControl: ISR_NEVER_CACHE_CONTROL });
+            markPagesPrerenderSharedCacheBypass(response.headers);
           }
           return finalizePagesPreviewResponse(response, preview);
         }
@@ -989,46 +1075,40 @@ export function createPagesPageHandler(
         // and expects the full props envelope (pageProps plus any app-level
         // props like __N_SSP, __N_SSG) as JSON instead of the full HTML page.
         if (isDataReq) {
-          const init: ResponseInit & { headers: Record<string, string> } = { headers: {} };
+          const headers = new Headers();
           if (gsspRes && typeof gsspRes.getHeaders === "function") {
             const gsspHeaders = gsspRes.getHeaders();
             for (const k of Object.keys(gsspHeaders)) {
               const v = gsspHeaders[k];
               if (v === undefined || v === null) continue;
-              init.headers[k] = Array.isArray(v) ? v.join(", ") : String(v);
+              if (k.toLowerCase() === "set-cookie" && Array.isArray(v)) {
+                for (const cookie of v) headers.append(k, String(cookie));
+              } else {
+                headers.set(k, Array.isArray(v) ? v.join(", ") : String(v));
+              }
             }
           }
           if (gsspRes) {
             // Default Cache-Control for gSSP-driven _next/data responses —
             // skip when gSSP already set one via res.setHeader. Fixes #1461.
-            let hasUserCacheControl = false;
-            for (const headerKey of Object.keys(init.headers)) {
-              if (headerKey.toLowerCase() === "cache-control") {
-                hasUserCacheControl = true;
-                break;
-              }
-            }
-            if (!hasUserCacheControl) {
-              init.headers["Cache-Control"] = ISR_NEVER_CACHE_CONTROL;
-            }
+            if (!headers.has("Cache-Control"))
+              headers.set("Cache-Control", ISR_NEVER_CACHE_CONTROL);
           } else if (bypassSharedCache) {
-            const headers = new Headers(init.headers);
             applyCdnResponseHeaders(headers, { cacheControl: ISR_NEVER_CACHE_CONTROL });
-            init.headers = Object.fromEntries(headers);
           } else if (isStaticPropsRoute) {
             if (isrRevalidateSeconds !== null) {
-              const headers = new Headers(init.headers);
+              const stem = isrCachePathname.endsWith("/")
+                ? isrCachePathname.slice(0, -1)
+                : isrCachePathname;
               applyCdnResponseHeaders(headers, {
                 cacheControl: buildMissIsrCacheControl(
                   isrRevalidateSeconds,
                   vinextConfig.expireTime,
                 ),
+                tags: [encodeCacheTag(`_N_T_${stem || "/"}`)],
               });
-              for (const [key, value] of headers) {
-                init.headers[key] = value;
-              }
             } else if (shouldUseNextDeployCacheControl()) {
-              init.headers["Cache-Control"] = BROWSER_REVALIDATE_CACHE_CONTROL;
+              headers.set("Cache-Control", BROWSER_REVALIDATE_CACHE_CONTROL);
             }
           }
           // Mirror Next.js pages-handler.ts: set x-nextjs-deployment-id on
@@ -1040,11 +1120,11 @@ export function createPagesPageHandler(
             const deploymentId =
               process.env.__VINEXT_DEPLOYMENT_ID || process.env.NEXT_DEPLOYMENT_ID;
             if (deploymentId) {
-              init.headers[NEXTJS_DEPLOYMENT_ID_HEADER] = deploymentId;
+              headers.set(NEXTJS_DEPLOYMENT_ID_HEADER, deploymentId);
             }
           }
           return finalizePagesPreviewResponse(
-            buildNextDataPropsJsonResponse(renderProps, safeJsonStringify, init),
+            buildNextDataPropsJsonResponse(renderProps, safeJsonStringify, { headers }),
             preview,
           );
         }
@@ -1101,7 +1181,7 @@ export function createPagesPageHandler(
           bypassSharedCache,
           isOnDemandRevalidate,
           isStaticPropsRoute,
-          isrSet,
+          isrSet: routeIsrSet,
           i18n: buildI18nRenderContext(i18nConfig, locale, currentDefaultLocale, domainLocales),
           isFallback: isFallbackRender,
           pageProps,
@@ -1137,6 +1217,7 @@ export function createPagesPageHandler(
         }
         if (options?.__bypassSharedCache) {
           applyCdnResponseHeaders(pageResponse.headers, { cacheControl: ISR_NEVER_CACHE_CONTROL });
+          markPagesPrerenderSharedCacheBypass(pageResponse.headers);
         }
         return finalizePagesPreviewResponse(pageResponse, preview);
       } catch (e) {
@@ -1177,16 +1258,23 @@ export function createPagesPageHandler(
           }
           if (errorRoute) {
             try {
-              const errorResponse = await renderPage(request, url, manifest, middlewareHeaders, {
-                statusCode: 500,
-                asPath: url,
-                renderErrorPageOnMiss: false,
-                __isInternalErrorRender: true,
-                __bypassSharedCache:
-                  requestAwareStaticPropsRoute || options?.__bypassSharedCache === true,
-                __forcedRoute: errorRoute,
-                err: e instanceof Error ? e : new Error(String(e)),
-              });
+              const errorResponse = await renderPage(
+                request,
+                url,
+                manifest,
+                middlewareHeaders,
+                {
+                  statusCode: 500,
+                  asPath: url,
+                  renderErrorPageOnMiss: false,
+                  __isInternalErrorRender: true,
+                  __bypassSharedCache:
+                    requestAwareStaticPropsRoute || options?.__bypassSharedCache === true,
+                  __forcedRoute: errorRoute,
+                  err: e instanceof Error ? e : new Error(String(e)),
+                },
+                initialResponseHeaders,
+              );
               if (isFatalPrerenderError) {
                 errorResponse.headers.set(VINEXT_PRERENDER_RENDER_ERROR_HEADER, "1");
               }
@@ -1199,6 +1287,7 @@ export function createPagesPageHandler(
         const response = new Response("Internal Server Error", { status: 500 });
         if (requestAwareStaticPropsRoute || options?.__bypassSharedCache) {
           applyCdnResponseHeaders(response.headers, { cacheControl: ISR_NEVER_CACHE_CONTROL });
+          markPagesPrerenderSharedCacheBypass(response.headers);
         }
         if (isFatalPrerenderError) {
           response.headers.set(VINEXT_PRERENDER_RENDER_ERROR_HEADER, "1");

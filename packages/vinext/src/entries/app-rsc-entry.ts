@@ -20,6 +20,7 @@ import type {
 } from "../config/next-config.js";
 import type { ImageConfig } from "../server/image-optimization.js";
 import type { AppRoute } from "../routing/app-router.js";
+import { routePatternParts } from "../routing/route-pattern.js";
 import { generateDevOriginCheckCode } from "../server/dev-origin-check.js";
 import { safeJsonStringify } from "../server/html.js";
 import type { MetadataFileRoute } from "../server/metadata-routes.js";
@@ -48,6 +49,10 @@ const appRouteRequestBuiltInsPath = resolveEntryPath(
 );
 const appRouteHandlerResponsePath = resolveEntryPath(
   "../server/app-route-handler-response.js",
+  import.meta.url,
+);
+const appRouteHandlerMiddlewareContextPath = resolveEntryPath(
+  "../server/app-route-handler-middleware-context.js",
   import.meta.url,
 );
 const appServerActionExecutionPath = resolveEntryPath(
@@ -87,6 +92,14 @@ const appRscRouteMatchingPath = resolveEntryPath(
   "../server/app-rsc-route-matching.js",
   import.meta.url,
 );
+const appRscResponseStagePath = resolveEntryPath(
+  "../server/app-rsc-response-stage.js",
+  import.meta.url,
+);
+const appRscCombinedHandlerPath = resolveEntryPath(
+  "../server/app-rsc-combined-handler.js",
+  import.meta.url,
+);
 const rscStreamHintsPath = resolveEntryPath("../server/rsc-stream-hints.js", import.meta.url);
 const isrCachePath = resolveEntryPath("../server/isr-cache.js", import.meta.url);
 const thenableParamsShimPath = resolveEntryPath("../shims/thenable-params.js", import.meta.url);
@@ -103,6 +116,14 @@ const appRscErrorHandlerPath = resolveEntryPath(
   import.meta.url,
 );
 const appRequestContextPath = resolveEntryPath("../server/app-request-context.js", import.meta.url);
+const appRequestStageContextPath = resolveEntryPath(
+  "../server/app-request-stage-context.js",
+  import.meta.url,
+);
+const appRequestStageDispatchPath = resolveEntryPath(
+  "../server/app-request-stage-dispatch.js",
+  import.meta.url,
+);
 const appRouteModuleLoaderPath = resolveEntryPath(
   "../server/app-route-module-loader.js",
   import.meta.url,
@@ -122,6 +143,7 @@ const appHookWarningSuppressionPath = resolveEntryPath(
 );
 const serverGlobalsPath = resolveEntryPath("../server/server-globals.js", import.meta.url);
 const appPagesBridgePath = resolveEntryPath("../server/app-pages-bridge.js", import.meta.url);
+const routePatternPath = resolveEntryPath("../routing/route-pattern.js", import.meta.url);
 
 /**
  * Resolved config options relevant to App Router request handling.
@@ -205,7 +227,301 @@ type AppRouterConfig = {
   publicFiles?: string[];
   /** Server-only token used to validate the draft-mode bypass cookie. */
   draftModeSecret?: string;
+  /** Server-only token used to authorize build-time prerender endpoints. */
+  prerenderSecret?: string;
 };
+
+function buildAppRequestRouteMetadata(routes: AppRoute[]): unknown[] {
+  return routes.map((route) => ({
+    ids: route.ids ?? null,
+    pattern: route.pattern,
+    patternParts: route.patternParts,
+    isDynamic: route.isDynamic,
+    params: route.params,
+    rootParamNames: route.rootParamNames ?? [],
+    page: route.pagePath ? true : null,
+    routeHandler: route.routePath ? true : null,
+    routeSegments: route.routeSegments,
+    layouts: [],
+    layoutTreePositions: [],
+    slots: Object.fromEntries(
+      route.parallelSlots.map((slot) => [
+        slot.key,
+        {
+          id: slot.id ?? null,
+          name: slot.name,
+          intercepts: slot.interceptingRoutes.map((intercept) => ({
+            id: intercept.id ?? null,
+            targetPattern: intercept.targetPattern,
+            sourceMatchPattern: intercept.sourceMatchPattern,
+            sourcePageSegments: intercept.sourcePageSegments,
+            interceptLayouts: [],
+            interceptLayoutSegments: intercept.layoutSegments ?? [],
+            interceptBranchSegments: intercept.branchSegments ?? [],
+            interceptLoadings: [],
+            interceptLoadingTreePositions: intercept.loadingTreePositions ?? [],
+            interceptNotFoundBranchSegments:
+              intercept.notFoundBranchSegments ?? intercept.branchSegments ?? [],
+            page: null,
+            notFound: null,
+            notFoundTreePosition: intercept.notFoundTreePosition ?? null,
+            params: intercept.params,
+          })),
+        },
+      ]),
+    ),
+    siblingIntercepts: route.siblingIntercepts.map((intercept) => ({
+      id: intercept.id ?? null,
+      targetPattern: intercept.targetPattern,
+      sourceMatchPattern: intercept.sourceMatchPattern,
+      sourcePageSegments: intercept.sourcePageSegments,
+      slotId: intercept.slotId ?? null,
+      interceptLayouts: [],
+      interceptLayoutSegments: intercept.layoutSegments ?? [],
+      interceptBranchSegments: intercept.branchSegments ?? [],
+      interceptLoadings: [],
+      interceptLoadingTreePositions: intercept.loadingTreePositions ?? [],
+      interceptNotFoundBranchSegments:
+        intercept.notFoundBranchSegments ?? intercept.branchSegments ?? [],
+      page: null,
+      notFound: null,
+      notFoundTreePosition: intercept.notFoundTreePosition ?? null,
+      params: intercept.params,
+    })),
+  }));
+}
+
+/** Generate the module-free App request stage used by multi-stage Worker outputs. */
+export function generateAppRequestRscEntry(
+  appDir: string,
+  routes: AppRoute[],
+  middlewarePath?: string | null,
+  metadataRoutes?: MetadataFileRoute[],
+  _globalErrorPath?: string | null,
+  basePath?: string,
+  trailingSlash?: boolean,
+  config?: AppRouterConfig,
+  instrumentationPath?: string | null,
+): string {
+  void appDir;
+  const bp = basePath ?? "";
+  const ts = trailingSlash ?? false;
+  const hasPagesDir = config?.hasPagesDir ?? false;
+  const requestRoutes = buildAppRequestRouteMetadata(routes);
+  const metadataRouteMatchers = (metadataRoutes ?? []).map((route) => ({
+    isDynamic: route.isDynamic,
+    patternParts:
+      route.patternParts ??
+      (route.servedUrl.includes("[") ? routePatternParts(route.servedUrl) : null),
+    servedUrl: route.servedUrl,
+    type: route.type,
+  }));
+
+  return `
+import ${JSON.stringify(serverGlobalsPath)};
+import { createAppRscRequestHandler } from "vinext/server/app-rsc-handler";
+import { createAppRscRouteMatcher as __createAppRscRouteMatcher } from ${JSON.stringify(appRscRouteMatchingPath)};
+import { dispatchAppRequestStage as __dispatchAppRequestStage } from ${JSON.stringify(appRequestStageDispatchPath)};
+import { registerConfiguredCacheAdapters as __registerConfiguredCacheAdapters } from "virtual:vinext-cdn-cache-adapter";
+import { clearAppRequestStageContext as __clearRequestContext, setAppRequestStageNavigationContext as setNavigationContext } from ${JSON.stringify(appRequestStageContextPath)};
+import { matchRoutePattern as __matchRoutePattern } from ${JSON.stringify(routePatternPath)};
+${
+  middlewarePath
+    ? `import * as middlewareModule from ${JSON.stringify(toSlash(middlewarePath))};
+import { applyAppMiddleware as __applyAppMiddleware } from ${JSON.stringify(appMiddlewarePath)};`
+    : ""
+}
+${
+  instrumentationPath
+    ? `import * as _instrumentation from ${JSON.stringify(toSlash(instrumentationPath))};
+import { ensureInstrumentationRegistered as __ensureInstrumentationRegistered } from ${JSON.stringify(instrumentationRuntimePath)};`
+    : ""
+}
+${
+  hasPagesDir
+    ? `import { getDraftModeCookieHeader } from "next/headers";
+import * as __pagesRequestEntry from "virtual:vinext-pages-request-entry";
+import { renderPagesFallback as __renderPagesFallback } from ${JSON.stringify(appPagesBridgePath)};
+import { buildRequestHeadersFromMiddlewareResponse as __buildRequestHeadersFromMiddlewareResponse } from ${JSON.stringify(middlewareRequestHeadersPath)};
+import { decodePathParams as __decodePathParams } from ${JSON.stringify(normalizePathModulePath)};
+import { applyRouteHandlerMiddlewareContext as __applyRouteHandlerMiddlewareContext } from ${JSON.stringify(appRouteHandlerMiddlewareContextPath)};`
+    : ""
+}
+
+const __basePath = ${JSON.stringify(bp)};
+const __trailingSlash = ${JSON.stringify(ts)};
+const __draftModeSecret = ${JSON.stringify(config?.draftModeSecret ?? "")};
+export const __prerenderSecret = ${JSON.stringify(config?.prerenderSecret ?? "")};
+export const __assetPrefix = ${JSON.stringify(config?.assetPrefix ?? "")};
+export { __basePath };
+export const __imageAllowedWidths = ${JSON.stringify([
+    ...(config?.imageConfig?.deviceSizes ?? DEFAULT_DEVICE_SIZES),
+    ...(config?.imageConfig?.imageSizes ?? DEFAULT_IMAGE_SIZES),
+  ])};
+export const __imageConfig = ${JSON.stringify({
+    qualities: config?.imageConfig?.qualities,
+    dangerouslyAllowSVG: config?.imageConfig?.dangerouslyAllowSVG,
+    dangerouslyAllowLocalIP: config?.imageConfig?.dangerouslyAllowLocalIP,
+    contentDispositionType: config?.imageConfig?.contentDispositionType,
+    contentSecurityPolicy: config?.imageConfig?.contentSecurityPolicy,
+  })};
+const __routes = ${JSON.stringify(requestRoutes)};
+const __routeMatcher = __createAppRscRouteMatcher(__routes);
+const __metadataRouteMatchers = ${JSON.stringify(metadataRouteMatchers)};
+
+function matchRoute(pathname) { return __routeMatcher.matchRoute(pathname); }
+function matchRequestRoute(pathname) { return __routeMatcher.matchRequestRoute(pathname); }
+function hasInterceptionId(interceptionId) { return __routeMatcher.hasInterceptionId(interceptionId); }
+function __isMetadataPath(pathname) {
+  const parts = pathname.split("/").filter(Boolean);
+  return __metadataRouteMatchers.some((route) => {
+    const matchesBase = route.patternParts
+      ? __matchRoutePattern(parts, route.patternParts) !== null
+      : pathname === route.servedUrl;
+    if (matchesBase) return true;
+    if (!route.isDynamic) return false;
+    if (route.type === "sitemap") {
+      const prefix = route.servedUrl.slice(0, -4);
+      const id = pathname.startsWith(prefix + "/") && pathname.endsWith(".xml")
+        ? pathname.slice(prefix.length + 1, -4)
+        : "";
+      return id !== "" && !id.includes("/");
+    }
+    if (
+      route.type === "icon" ||
+      route.type === "apple-icon" ||
+      route.type === "opengraph-image" ||
+      route.type === "twitter-image"
+    ) {
+      return route.patternParts
+        ? parts.length > 0 && __matchRoutePattern(parts.slice(0, -1), route.patternParts) !== null
+        : pathname.startsWith(route.servedUrl + "/") &&
+            !pathname.slice(route.servedUrl.length + 1).includes("/");
+    }
+    return false;
+  });
+}
+${generateDevOriginCheckCode(config?.allowedDevOrigins)}
+
+const __requestHandler = createAppRscRequestHandler({
+  basePath: __basePath,
+  buildId: process.env.__VINEXT_BUILD_ID ?? null,
+  clearRequestContext: __clearRequestContext,
+  configHeaders: ${JSON.stringify(config?.headers ?? [])},
+  configRedirects: ${JSON.stringify(config?.redirects ?? [])},
+  configRewrites: ${JSON.stringify(config?.rewrites ?? { beforeFiles: [], afterFiles: [], fallback: [] })},
+  draftModeSecret: __draftModeSecret,
+  dispatchMatchedPage() { throw new Error("App request stage attempted to render a page inline"); },
+  dispatchMatchedRouteHandler() { throw new Error("App request stage attempted to render a route handler inline"); },
+  ${
+    instrumentationPath
+      ? `ensureInstrumentation() { return __ensureInstrumentationRegistered(_instrumentation); },`
+      : ""
+  }
+  i18nConfig: ${JSON.stringify(config?.i18n ?? null)},
+  imageConfig: ${JSON.stringify(config?.imageConfig)},
+  isMetadataRoute: __isMetadataPath,
+  isDev: process.env.NODE_ENV !== "production",
+  hasInterceptionId,
+  matchRoute,
+  matchRequestRoute,
+  matchInterceptRoute(pathname, sourcePathname, interceptionId) {
+    const intercept = __routeMatcher.findIntercept(pathname, sourcePathname, interceptionId);
+    if (!intercept) return null;
+    const route = __routes[intercept.sourceRouteIndex];
+    if (!route) return null;
+    const params = Object.create(null);
+    for (const name of route.params) {
+      if (Object.prototype.hasOwnProperty.call(intercept.sourceMatchedParams, name)) {
+        params[name] = intercept.sourceMatchedParams[name];
+      }
+    }
+    return {
+      interceptionSourceIsConcrete: intercept.sourceRouteIsConcrete,
+      route,
+      params,
+    };
+  },
+  ${
+    middlewarePath
+      ? `runMiddleware({ cleanPathname, context, externalRewriteRequest, hadBasePath, isDataRequest, middlewareRequest, request, validateExternalRewriteRequest }) {
+    return __applyAppMiddleware({
+      basePath: __basePath,
+      cleanPathname,
+      context,
+      externalRewriteRequest,
+      hadBasePath,
+      filePath: ${JSON.stringify(toSlash(middlewarePath))},
+      i18nConfig: ${JSON.stringify(config?.i18n ?? null)},
+      isDataRequest,
+      isProxy: ${JSON.stringify(isProxyFile(middlewarePath))},
+      middlewareRequest,
+      module: middlewareModule,
+      request,
+      trailingSlash: __trailingSlash,
+      validateExternalRewriteRequest,
+    });
+  },`
+      : ""
+  }
+  publicFiles: new Set(${JSON.stringify(config?.publicFiles ?? [])}),
+  registerCacheAdapters: __registerConfiguredCacheAdapters,
+  renderNotFound: async () => null,
+  ${
+    hasPagesDir
+      ? `async renderPagesFallback({ allowRscDocumentFallback, appRouteMatch, dispatchPagesResponseStage, initialResponseHeaders, isDataRequest, isRscRequest, matchKind, middlewareContext, pathname, pagesDataRequest, request, url }) {
+    return __renderPagesFallback(
+      { allowRscDocumentFallback, appRouteMatch, initialResponseHeaders, isDataRequest, isRscRequest, matchKind, middlewareContext, pathname, pagesDataRequest, request, url },
+      {
+        async loadPagesEntry() {
+          if (!dispatchPagesResponseStage) {
+            throw new Error("App request stage requires a Pages response-stage dispatcher");
+          }
+          return {
+            ...__pagesRequestEntry,
+            handleApiRoute(stageRequest) { return dispatchPagesResponseStage(stageRequest, "api"); },
+            renderPage(stageRequest, pagesUrl) {
+              const dataKind = __pagesRequestEntry.matchPageRoute?.(pagesUrl, stageRequest)?.route.dataKind;
+              return dispatchPagesResponseStage(stageRequest, "page", dataKind, __pagesRequestEntry.hasRequestAwareDocument);
+            },
+          };
+        },
+        buildRequestHeaders: __buildRequestHeadersFromMiddlewareResponse,
+        decodePathParams: __decodePathParams,
+        applyRouteHandlerMiddlewareContext: __applyRouteHandlerMiddlewareContext,
+        getDraftModeCookieHeader,
+      }
+    );
+  },`
+      : ""
+  }
+  rootParamNamesByPattern: {},
+  setNavigationContext,
+  staticParamsMap: {},
+  trailingSlash: __trailingSlash,
+  validateDevRequestOrigin: __validateDevRequestOrigin,
+});
+
+export default async function handleAppRequestStage(
+  request,
+  ctx,
+  dispatchResponseStage,
+  probeMode = null,
+  prerenderDiscovery = false,
+  trustedPrerenderState = null,
+) {
+  return __dispatchAppRequestStage(request, ctx, dispatchResponseStage, {
+    basePath: __basePath,
+    buildId: process.env.__VINEXT_BUILD_ID ?? null,
+    draftModeSecret: __draftModeSecret,
+    handleRequest: __requestHandler,
+    prerenderDiscovery,
+    probeMode,
+    trustedPrerenderState,
+  });
+}
+`;
+}
 
 /**
  * Generate the virtual RSC entry module.
@@ -224,6 +540,7 @@ export function generateRscEntry(
   trailingSlash?: boolean,
   config?: AppRouterConfig,
   instrumentationPath?: string | null,
+  responseStageOnly = false,
 ): string {
   const bp = basePath ?? "";
   const ts = trailingSlash ?? false;
@@ -249,6 +566,7 @@ export function generateRscEntry(
   const hasPagesDir = config?.hasPagesDir ?? false;
   const publicFiles = config?.publicFiles ?? [];
   const draftModeSecret = config?.draftModeSecret ?? randomUUID();
+  const prerenderSecret = config?.prerenderSecret ?? randomUUID();
   const imageAllowedWidths = [
     ...(config?.imageConfig?.deviceSizes ?? DEFAULT_DEVICE_SIZES),
     ...(config?.imageConfig?.imageSizes ?? DEFAULT_IMAGE_SIZES),
@@ -298,6 +616,8 @@ import ${JSON.stringify(appRouteRequestBuiltInsPath)};`
     : ""
 }
 import ${JSON.stringify(serverGlobalsPath)};
+import __cacheabilityManifest from "virtual:vinext-cacheability-manifest";
+export { __cacheabilityManifest };
 import {
   renderToReadableStream as _renderToReadableStream,
   ${
@@ -338,7 +658,11 @@ ${
 import { ensureInstrumentationRegistered as __ensureInstrumentationRegistered } from ${JSON.stringify(instrumentationRuntimePath)};`
     : ""
 }
-import { createAppRscHandler } from "vinext/server/app-rsc-handler";
+${
+  responseStageOnly
+    ? `import { renderAppWorkerResponseStage as __renderAppWorkerResponseStage } from ${JSON.stringify(appRscResponseStagePath)};`
+    : `import { createAppRscHandler } from ${JSON.stringify(appRscCombinedHandlerPath)};`
+}
 import { registerConfiguredCacheAdapters as __registerConfiguredCacheAdapters } from "virtual:vinext-cache-adapters";
 import __pagesClientAssets from "virtual:vinext-pages-client-assets";
 ${
@@ -458,6 +782,7 @@ import {
   getRenderedConcreteUrlPathsForRoute as __getRenderedConcreteUrlPathsForRoute,
   initPregeneratedPathsFromGlobals as __initPregeneratedPathsFromGlobals,
 } from ${JSON.stringify(pregeneratedConcretePathsPath)};
+import "virtual:vinext-pregenerated-concrete-paths";
 
 const __draftModeSecret = ${JSON.stringify(draftModeSecret)};
 
@@ -581,6 +906,9 @@ ${metaRouteEntries.join(",\n")}
 // Re-exported so the Cloudflare worker entry can strip basePath before
 // recognising /_next/static/* paths (parity with __assetPrefix below).
 export const __basePath = ${JSON.stringify(bp)};
+// Per-build capability used by Worker entries to authorize remote path
+// discovery. It is never included in responses or exposed to user modules.
+export const __prerenderSecret = ${JSON.stringify(prerenderSecret)};
 
 // Hoisted alongside __basePath so __fallbackRenderer / buildPageElements can
 // thread the configured trailingSlash flag through canonical URL rendering.
@@ -769,7 +1097,7 @@ ${rootParamNameEntries.join("\n")}
 
 __setPagesClientAssets(__pagesClientAssets);
 function __VINEXT_ACTION_OWNERS() { return ${actionOwners === undefined ? "__vinextActionOwners" : safeJsonStringify(actionOwners)}; }
-const __appRscHandler = createAppRscHandler({
+${responseStageOnly ? "const __responseStageOptions = {" : "const __appRscHandler = createAppRscHandler({"}
   basePath: __basePath,
   buildId: process.env.__VINEXT_BUILD_ID ?? null,
   ensureRouteLoaded: __ensureRouteLoaded,
@@ -792,6 +1120,7 @@ const __appRscHandler = createAppRscHandler({
   isDev: process.env.NODE_ENV !== "production",
   draftModeSecret: __draftModeSecret,
   dispatchMatchedPage({
+    bypassInterceptionContextCache,
     clientReuseManifest,
     cleanPathname,
     displayPathname,
@@ -854,6 +1183,7 @@ const __appRscHandler = createAppRscHandler({
     const _asyncRouteParams = makeThenableParams(params);
     return __dispatchAppPage({
       basePath: __basePath,
+      bypassInterceptionContextCache,
       ensureRouteLoaded: __ensureRouteLoaded,
       clientTraceMetadata: __clientTraceMetadata,
       reactMaxHeadersLength: __reactMaxHeadersLength,
@@ -944,7 +1274,11 @@ const __appRscHandler = createAppRscHandler({
         });
       },
       async probePage(probeSearchParams = searchParams) {
-        const __probeIntercept = findIntercept(interceptionPathname, interceptionContext);
+        const __probeIntercept = findIntercept(
+          interceptionPathname,
+          interceptionContext,
+          interceptionId,
+        );
         // The intercepting-route page module is lazy (page: null + __pageLoader).
         // Resolve it before probing so buildAppPageProbes inspects the real page
         // component for dynamic bailout — matching the render path, which also
@@ -965,7 +1299,11 @@ const __appRscHandler = createAppRscHandler({
         }));
       },
       renderErrorBoundaryPage(renderErr, errorOrigin) {
-        const __activeIntercept = findIntercept(interceptionPathname, interceptionContext);
+        const __activeIntercept = findIntercept(
+          interceptionPathname,
+          interceptionContext,
+          interceptionId,
+        );
         return __fallbackRenderer.renderErrorBoundary(route, renderErr, isRscRequest, request, params, scriptNonce, middlewareContext, {
           isEdgeRuntime: __isEdgeRuntime(__segmentConfig.runtime),
           sourcePageSegments: __activeIntercept?.slotKey === __SIBLING_PAGE_INTERCEPT_SLOT_KEY
@@ -974,7 +1312,11 @@ const __appRscHandler = createAppRscHandler({
         }, errorOrigin);
       },
       renderHttpAccessFallbackPage(statusCode, opts, currentMiddlewareContext) {
-        const __activeIntercept = findIntercept(interceptionPathname, interceptionContext);
+        const __activeIntercept = findIntercept(
+          interceptionPathname,
+          interceptionContext,
+          interceptionId,
+        );
         return __fallbackRenderer.renderHttpAccessFallback(route, statusCode, isRscRequest, request, opts, scriptNonce, currentMiddlewareContext, {
           isEdgeRuntime: __isEdgeRuntime(__segmentConfig.runtime),
           routePathname: cleanPathname,
@@ -1388,7 +1730,11 @@ const __appRscHandler = createAppRscHandler({
         params[name] = intercept.sourceMatchedParams[name];
       }
     }
-    return { route, params };
+    return {
+      interceptionSourceIsConcrete: intercept.sourceRouteIsConcrete,
+      route,
+      params,
+    };
   },
   ${
     middlewarePath
@@ -1419,12 +1765,33 @@ const __appRscHandler = createAppRscHandler({
   },
   ${
     hasPagesDir
-      ? `async renderPagesFallback({ allowRscDocumentFallback, appRouteMatch, isDataRequest, isRscRequest, matchKind, middlewareContext, pathname, pagesDataRequest, request, url }) {
+      ? `async renderPagesFallback({ allowRscDocumentFallback, appRouteMatch, dispatchPagesResponseStage, initialResponseHeaders, isDataRequest, isRscRequest, matchKind, middlewareContext, pathname, pagesDataRequest, request, url }) {
     return __renderPagesFallback(
-      { allowRscDocumentFallback, appRouteMatch, isDataRequest, isRscRequest, matchKind, middlewareContext, pathname, pagesDataRequest, request, url },
+      { allowRscDocumentFallback, appRouteMatch, initialResponseHeaders, isDataRequest, isRscRequest, matchKind, middlewareContext, pathname, pagesDataRequest, request, url },
       {
-        loadPagesEntry() {
-          return import.meta.viteRsc.loadModule("ssr", "index");
+        async loadPagesEntry() {
+          const __pagesEntry = await import.meta.viteRsc.loadModule("ssr", "index");
+          if (!dispatchPagesResponseStage) {
+            return __pagesEntry;
+          }
+          return {
+            ...__pagesEntry,
+            ...(typeof __pagesEntry.handleApiRoute === "function"
+              ? {
+                  handleApiRoute(stageRequest) {
+                    return dispatchPagesResponseStage(stageRequest, "api");
+                  },
+                }
+              : {}),
+            ...(typeof __pagesEntry.renderPage === "function"
+              ? {
+                  renderPage(stageRequest, pagesUrl) {
+                    const dataKind = __pagesEntry.matchPageRoute?.(pagesUrl, stageRequest)?.route.dataKind;
+                    return dispatchPagesResponseStage(stageRequest, "page", dataKind, __pagesEntry.hasRequestAwareDocument);
+                  },
+                }
+              : {}),
+          };
         },
         buildRequestHeaders: __buildRequestHeadersFromMiddlewareResponse,
         decodePathParams: __decodePathParams,
@@ -1440,12 +1807,46 @@ const __appRscHandler = createAppRscHandler({
   staticParamsMap: generateStaticParamsMap,
   trailingSlash: __trailingSlash,
   validateDevRequestOrigin: __validateDevRequestOrigin,
-});
-
-export default __appRscHandler;
+${
+  responseStageOnly
+    ? `};
+export default {
+  handleResponseStage(request, ctx, props, options) {
+    return __renderAppWorkerResponseStage(__responseStageOptions, request, ctx, props, options);
+  },
+};`
+    : `});
+export default __appRscHandler;`
+}
 
 if (import.meta.hot) {
   import.meta.hot.accept();
 }
 `;
+}
+
+/** Generate the response-only App RSC graph used by the named cache stage. */
+export function generateAppResponseRscEntry(
+  appDir: string,
+  routes: AppRoute[],
+  _middlewarePath?: string | null,
+  metadataRoutes?: MetadataFileRoute[],
+  globalErrorPath?: string | null,
+  basePath?: string,
+  trailingSlash?: boolean,
+  config?: AppRouterConfig,
+  instrumentationPath?: string | null,
+): string {
+  return generateRscEntry(
+    appDir,
+    routes,
+    null,
+    metadataRoutes,
+    globalErrorPath,
+    basePath,
+    trailingSlash,
+    config,
+    instrumentationPath,
+    true,
+  );
 }

@@ -1,4 +1,5 @@
 import { hasPagesGetInitialProps } from "./pages-get-initial-props.js";
+import { VINEXT_PRERENDER_SHARED_CACHE_BYPASS_HEADER } from "./headers.js";
 
 const SSG_GET_INITIAL_PROPS_CONFLICT =
   "You can not use getInitialProps with getStaticProps. To use SSG, please remove your getInitialProps";
@@ -10,6 +11,12 @@ export type PagesDataExportModule = {
 
 export class PagesDataExportCompatibilityError extends Error {
   override name = "PagesDataExportCompatibilityError";
+}
+
+export function markPagesPrerenderSharedCacheBypass(headers: Headers): void {
+  if (process.env.VINEXT_PRERENDER === "1") {
+    headers.set(VINEXT_PRERENDER_SHARED_CACHE_BYPASS_HEADER, "1");
+  }
 }
 
 /** Reject Pages data-export combinations that Next.js does not allow. */
