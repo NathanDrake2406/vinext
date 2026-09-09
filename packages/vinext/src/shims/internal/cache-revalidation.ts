@@ -114,6 +114,25 @@ export function runForegroundCacheRevalidation<T>(
   return trackedRevalidation;
 }
 
+/** Run every computation while still ordering writes to one physical family. */
+export function runUncoalescedForegroundCacheRevalidation<T>(
+  writeFamily: string,
+  refresh: (lease: CacheRevalidationLease) => Promise<T>,
+): Promise<T> {
+  const { revalidation, writeCoordinator } = startCacheRevalidation(false, writeFamily);
+  const coordinator = { active: 1, current: revalidation };
+  let trackedRevalidation!: Promise<T>;
+  trackedRevalidation = Promise.resolve()
+    .then(() => refresh(createLease(coordinator, writeCoordinator, revalidation)))
+    .finally(() => {
+      revalidation.active = false;
+      coordinator.active -= 1;
+      finishCacheRevalidation(writeFamily, writeCoordinator);
+    });
+  revalidation.promise = trackedRevalidation;
+  return trackedRevalidation;
+}
+
 async function repairCurrentWrite(claim: CacheWriteClaim): Promise<void> {
   while (true) {
     const current = claim.current;

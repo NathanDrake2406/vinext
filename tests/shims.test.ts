@@ -6720,7 +6720,7 @@ describe("next/cache shim", () => {
 
     const waitUntilPromises: Promise<unknown>[] = [];
     const requestContext = createRequestContext({
-      currentFetchSoftTags: ["_N_T_/page"],
+      bypassNestedUnstableCacheReads: true,
       functionCacheRevalidationMode: "background",
       executionContext: {
         waitUntil(promise) {

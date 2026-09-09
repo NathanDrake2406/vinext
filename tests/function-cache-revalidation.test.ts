@@ -43,7 +43,7 @@ describe("function cache revalidation", () => {
     }
     const outer = unstable_cache(outerSource, []);
 
-    const request = createRequestContext({ currentFetchSoftTags: ["_N_T_/page"] });
+    const request = createRequestContext({ bypassNestedUnstableCacheReads: true });
     await expect(runWithRequestContext(request, () => inner())).resolves.toBe("inner:1");
     expect(
       await Promise.race([
@@ -67,6 +67,52 @@ describe("function cache revalidation", () => {
     await expect(empty()).resolves.toBe(2);
     await expect(omitted()).resolves.toBe(1);
   });
+
+  it("runs concurrent nested App Router unstable_cache callbacks independently", async () => {
+    let calls = 0;
+    const inner = unstable_cache(async () => ++calls, ["concurrent-nested"]);
+    const outer = unstable_cache(() => Promise.all([inner(), inner()]), ["concurrent-outer"]);
+    const request = createRequestContext({ bypassNestedUnstableCacheReads: true });
+
+    await expect(runWithRequestContext(request, () => outer())).resolves.toEqual([1, 2]);
+    expect(calls).toBe(2);
+  });
+
+  it("retains nested unstable_cache reads in Pages Router work", async () => {
+    let calls = 0;
+    const inner = unstable_cache(async () => ++calls, ["pages-nested"]);
+    const outer = unstable_cache(() => inner(), ["pages-outer"]);
+    const request = createRequestContext();
+
+    await expect(runWithRequestContext(request, () => inner())).resolves.toBe(1);
+    await expect(runWithRequestContext(request, () => outer())).resolves.toBe(1);
+    expect(calls).toBe(1);
+  });
+
+  it.each(["miss", "hit"])(
+    "propagates unstable_cache tags and lifetime into an enclosing use cache on %s",
+    async (state) => {
+      const memory = new MemoryCacheHandler();
+      const set = vi.spyOn(memory, "set");
+      setCacheHandler(memory);
+      const tag = `nested-${state}`;
+      const inner = unstable_cache(async () => state, [`nested-${state}`], {
+        tags: [tag],
+        revalidate: 5,
+      });
+      if (state === "hit") await inner();
+      const outerKey = `nested-outer-${state}`;
+      const outer = registerCachedFunction(() => inner(), outerKey);
+
+      await outer();
+
+      const outerWrite = set.mock.calls.find(([key]) => key === `use-cache:${outerKey}`);
+      expect(outerWrite?.[2]).toMatchObject({
+        tags: [tag],
+        cacheControl: { revalidate: 5 },
+      });
+    },
+  );
 
   it.each(["fresh", "hit", undefined])(
     "accepts custom handler hit state %s for both cache APIs",

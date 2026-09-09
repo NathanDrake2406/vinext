@@ -2469,6 +2469,7 @@ export function createAppRscRequestHandler<TRoute extends AppRscHandlerRoute>(
       draftModeSecret: options.draftModeSecret,
     });
     const requestContext = createRequestContext({
+      bypassNestedUnstableCacheReads: true,
       headersContext,
       executionContext,
       // Ordinary runtime requests serve stale `use cache` data and refresh in

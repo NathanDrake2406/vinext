@@ -573,6 +573,7 @@ async function runAppPageRevalidationContext<
     routePattern: options.routePattern,
   });
   const requestContext = createRequestContext({
+    bypassNestedUnstableCacheReads: true,
     headersContext,
     currentFetchCacheMode: options.currentFetchCacheMode ?? null,
     currentFetchRevalidate: options.currentFetchRevalidate ?? null,

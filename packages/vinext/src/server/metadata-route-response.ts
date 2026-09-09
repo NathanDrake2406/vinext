@@ -327,7 +327,10 @@ async function runMetadataRouteRegeneration(
   previousEntry: ISRCacheEntry,
   executionContext: ReturnType<typeof getRequestExecutionContext>,
 ): Promise<void> {
-  const requestContext = createRequestContext({ executionContext });
+  const requestContext = createRequestContext({
+    bypassNestedUnstableCacheReads: true,
+    executionContext,
+  });
   try {
     await runWithRequestContext(requestContext, async () => {
       ensureFetchPatch();

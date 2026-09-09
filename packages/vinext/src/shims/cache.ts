@@ -28,6 +28,7 @@ import {
   type CacheRevalidationLease,
   hasPendingCacheWrites,
   runForegroundCacheRevalidation,
+  runUncoalescedForegroundCacheRevalidation,
   scheduleBackgroundCacheRevalidation,
 } from "./internal/cache-revalidation.js";
 import { fnv1a64 } from "../utils/hash.js";
@@ -40,6 +41,8 @@ import { getRequestExecutionContext } from "./request-context.js";
 import { isStagedCacheabilityProbeActive } from "./cacheability-classification.js";
 import {
   createCacheRevalidationContext,
+  getRequestContext,
+  isInsideUnifiedScope,
   runWithRequestContext,
 } from "./unified-request-context.js";
 import { addCollectedRequestTags, getCurrentFetchSoftTags } from "./fetch-cache.js";
@@ -610,13 +613,26 @@ export function unstable_cache<T extends (...args: any[]) => Promise<any>>(
       tagHash: tags.length > 0 ? fnv1a64(JSON.stringify(tags)) : null,
     });
 
+    const enclosingCache = getRegisteredCacheContext();
+    if (enclosingCache) {
+      for (const tag of tags) {
+        if (!enclosingCache.tags.includes(tag)) enclosingCache.tags.push(tag);
+      }
+      if (typeof revalidateSeconds === "number") {
+        enclosingCache.lifeConfigs.push({ revalidate: revalidateSeconds });
+      }
+    }
+
     // In App Router work, Next.js bypasses the data-cache read for
     // unstable_cache calls nested inside another unstable_cache callback, but
-    // still recomputes and writes the inner entry. App Router requests always
-    // carry path-derived soft tags; Pages Router calls do not.
+    // still recomputes and writes the inner entry. The request pipeline marks
+    // App Router work explicitly because generateStaticParams has no soft tags.
     // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/web/spec-extension/unstable-cache.ts
     const softTags = getCurrentFetchSoftTags();
-    const bypassNestedRead = isInsideUnstableCacheScope() && softTags.length > 0;
+    const bypassNestedRead =
+      isInsideUnstableCacheScope() &&
+      isInsideUnifiedScope() &&
+      getRequestContext().bypassNestedUnstableCacheReads;
     const isDraftMode = isDraftModeEnabled();
     if (!isDraftMode) {
       // Try to get from cache. Stale entries are usable in normal App Router
@@ -689,9 +705,11 @@ export function unstable_cache<T extends (...args: any[]) => Promise<any>>(
     if (isDraftMode) {
       return await _unstableCacheAls.run(true, () => fn(...args));
     }
-    return await runForegroundCacheRevalidation(cacheKey, (lease) =>
-      refreshUnstableCacheResult(fn, args, cacheKey, tags, revalidateSeconds, lease),
-    );
+    const refresh = (lease: CacheRevalidationLease) =>
+      refreshUnstableCacheResult(fn, args, cacheKey, tags, revalidateSeconds, lease);
+    return await (bypassNestedRead
+      ? runUncoalescedForegroundCacheRevalidation(cacheKey, refresh)
+      : runForegroundCacheRevalidation(cacheKey, refresh));
   };
 
   return cachedFn as T;

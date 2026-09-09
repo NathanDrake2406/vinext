@@ -37,6 +37,9 @@ import type {
  * Each field group is documented with its source shim module.
  */
 export type UnifiedRequestContext = {
+  /** App Router work bypasses reads from nested unstable_cache entries. */
+  bypassNestedUnstableCacheReads: boolean;
+
   // ── request-context.ts ─────────────────────────────────────────────
   /** Cloudflare Workers ExecutionContext, or null on Node.js dev. */
   executionContext: ExecutionContextLike | null;
@@ -97,6 +100,7 @@ function _getInheritedExecutionContext(): ExecutionContextLike | null {
  */
 export function createRequestContext(opts?: Partial<UnifiedRequestContext>): UnifiedRequestContext {
   return {
+    bypassNestedUnstableCacheReads: false,
     headersContext: null,
     actionRevalidationKind: 0,
     pendingRevalidatedTags: new Set<string>(),
@@ -184,6 +188,7 @@ export function createCacheRevalidationContext(
     isFetchDedupeActive: outer?.isFetchDedupeActive ?? false,
     currentFetchDedupeEntries: new Map(),
     rootParams,
+    bypassNestedUnstableCacheReads: outer?.bypassNestedUnstableCacheReads ?? false,
     functionCacheRevalidationMode: "foreground",
   });
 }

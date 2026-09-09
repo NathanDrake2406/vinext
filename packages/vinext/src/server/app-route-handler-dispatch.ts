@@ -141,6 +141,7 @@ async function runInRouteHandlerRevalidationContext(
     routePattern: options.routePattern,
   });
   const requestContext = createRequestContext({
+    bypassNestedUnstableCacheReads: true,
     headersContext,
     executionContext: getRequestExecutionContext(),
     functionCacheRevalidationMode: "foreground",
