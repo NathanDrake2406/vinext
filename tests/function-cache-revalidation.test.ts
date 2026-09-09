@@ -540,6 +540,76 @@ describe("function cache revalidation", () => {
     expect(await memory.get("unstable_cache:v2:zero-supersedes:[]", { kind: "FETCH" })).toBeNull();
   });
 
+  it("keeps zero-revalidate use cache disabled after a forced miss during an older write", async () => {
+    const memory = new MemoryCacheHandler();
+    const get = memory.get.bind(memory);
+    const set = memory.set.bind(memory);
+    let forceMiss = false;
+    let releaseOldWrite = () => {};
+    const oldWriteGate = new Promise<void>((resolve) => {
+      releaseOldWrite = resolve;
+    });
+    let markOldWriteStarted = () => {};
+    const oldWriteStarted = new Promise<void>((resolve) => {
+      markOldWriteStarted = resolve;
+    });
+    setCacheHandler({
+      async get(key, context) {
+        if (forceMiss) {
+          forceMiss = false;
+          return null;
+        }
+        return get(key, context);
+      },
+      async set(key, data, context) {
+        if (data?.kind === "FETCH" && data.data.body.includes("obsolete")) {
+          markOldWriteStarted();
+          await oldWriteGate;
+        }
+        await set(key, data, context);
+      },
+      revalidateTag: memory.revalidateTag.bind(memory),
+    });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(100_000);
+    let value = "initial";
+    let revalidate = 1;
+    const cached = registerCachedFunction(async () => {
+      cacheLife({ revalidate });
+      return value;
+    }, "zero-use-cache-forced-miss");
+    const pending: Promise<unknown>[] = [];
+    const read = () =>
+      runWithRequestContext(
+        createRequestContext({
+          functionCacheRevalidationMode: "background",
+          executionContext: {
+            waitUntil(promise) {
+              pending.push(promise);
+            },
+          },
+        }),
+        cached,
+      );
+
+    expect(await read()).toBe("initial");
+    clock.mockReturnValue(102_000);
+    value = "obsolete";
+    expect(await read()).toBe("initial");
+    await oldWriteStarted;
+    try {
+      revalidate = 0;
+      value = "uncached";
+      forceMiss = true;
+      expect(await read()).toBe("uncached");
+      releaseOldWrite();
+      await Promise.all(pending);
+      expect(await memory.get("use-cache:v1:zero-use-cache-forced-miss:[]")).toBeNull();
+    } finally {
+      releaseOldWrite();
+      await Promise.allSettled(pending);
+    }
+  });
+
   it.each(["use-cache", "unstable-cache"])(
     "allows another background %s refresh after a foreground fill supersedes a hung refresh",
     async (api) => {
