@@ -382,23 +382,162 @@ describe("function cache revalidation", () => {
     void runWithRequestContext(context, () =>
       scheduleBackgroundCacheRevalidation(
         "logical",
-        async (lease) => {
-          markNextStarted();
-          await nextGate;
-          await lease.write("physical", async () => {
+        (lease) =>
+          lease.write("physical", async () => {
+            markNextStarted();
+            await nextGate;
             stored = "latest";
-          });
+          }),
+        () => {},
+      ),
+    );
+    await nextStarted;
+    try {
+      releaseOld();
+      expect(
+        await Promise.race([
+          pending[0].then(() => "repaired"),
+          new Promise((resolve) => setImmediate(() => resolve("blocked"))),
+        ]),
+      ).toBe("repaired");
+      expect(stored).toBe("current");
+    } finally {
+      releaseNext();
+      await Promise.all(pending);
+    }
+    expect(stored).toBe("latest");
+  });
+
+  it("replays a newer commit that lands during repair of an older generation", async () => {
+    let stored = "initial";
+    let releaseOld = () => {};
+    const oldGate = new Promise<void>((resolve) => {
+      releaseOld = resolve;
+    });
+    let markOldStarted = () => {};
+    const oldStarted = new Promise<void>((resolve) => {
+      markOldStarted = resolve;
+    });
+    let releaseRepair = () => {};
+    const repairGate = new Promise<void>((resolve) => {
+      releaseRepair = resolve;
+    });
+    let markRepairStarted = () => {};
+    const repairStarted = new Promise<void>((resolve) => {
+      markRepairStarted = resolve;
+    });
+    let foregroundWrites = 0;
+    const foregroundWrite = async () => {
+      foregroundWrites++;
+      if (foregroundWrites > 1) {
+        markRepairStarted();
+        await repairGate;
+      }
+      stored = "current";
+    };
+    const pending: Promise<unknown>[] = [];
+    const context = createRequestContext({
+      executionContext: {
+        waitUntil(promise) {
+          pending.push(promise);
         },
+      },
+    });
+    void runWithRequestContext(context, () =>
+      scheduleBackgroundCacheRevalidation(
+        "logical",
+        (lease) =>
+          lease.write("physical", async () => {
+            markOldStarted();
+            await oldGate;
+            stored = "obsolete";
+          }),
+        () => {},
+      ),
+    );
+    await oldStarted;
+    await runForegroundCacheRevalidation("logical", (lease) =>
+      lease.write("physical", foregroundWrite),
+    );
+
+    let releaseNext = () => {};
+    const nextGate = new Promise<void>((resolve) => {
+      releaseNext = resolve;
+    });
+    let markNextStarted = () => {};
+    const nextStarted = new Promise<void>((resolve) => {
+      markNextStarted = resolve;
+    });
+    void runWithRequestContext(context, () =>
+      scheduleBackgroundCacheRevalidation(
+        "logical",
+        (lease) =>
+          lease.write("physical", async () => {
+            markNextStarted();
+            await nextGate;
+            stored = "latest";
+          }),
         () => {},
       ),
     );
     await nextStarted;
     releaseOld();
-    await pending[0];
-    expect(stored).toBe("current");
+    await repairStarted;
     releaseNext();
+    await pending[1];
+    releaseRepair();
     await Promise.all(pending);
     expect(stored).toBe("latest");
+  });
+
+  it("keeps zero-revalidate unstable_cache disabled after an older write completes", async () => {
+    const memory = new MemoryCacheHandler();
+    const set = memory.set.bind(memory);
+    let releaseOldWrite = () => {};
+    const oldWriteGate = new Promise<void>((resolve) => {
+      releaseOldWrite = resolve;
+    });
+    let markOldWriteStarted = () => {};
+    const oldWriteStarted = new Promise<void>((resolve) => {
+      markOldWriteStarted = resolve;
+    });
+    vi.spyOn(memory, "set").mockImplementation(async (key, data, context) => {
+      if (data?.kind === "FETCH" && data.data.body.includes("obsolete")) {
+        markOldWriteStarted();
+        await oldWriteGate;
+      }
+      await set(key, data, context);
+    });
+    setCacheHandler(memory);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(100_000);
+    let value = "initial";
+    const positive = unstable_cache(async () => value, ["zero-supersedes"], { revalidate: 1 });
+    const disabled = unstable_cache(async () => "uncached", ["zero-supersedes"], {
+      revalidate: 0,
+    });
+    const pending: Promise<unknown>[] = [];
+    const read = <T>(fn: () => Promise<T>) =>
+      runWithRequestContext(
+        createRequestContext({
+          functionCacheRevalidationMode: "background",
+          executionContext: {
+            waitUntil(promise) {
+              pending.push(promise);
+            },
+          },
+        }),
+        fn,
+      );
+
+    expect(await read(positive)).toBe("initial");
+    clock.mockReturnValue(102_000);
+    value = "obsolete";
+    expect(await read(positive)).toBe("initial");
+    await oldWriteStarted;
+    expect(await read(disabled)).toBe("uncached");
+    releaseOldWrite();
+    await Promise.all(pending);
+    expect(await memory.get("unstable_cache:v2:zero-supersedes:[]", { kind: "FETCH" })).toBeNull();
   });
 
   it.each(["use-cache", "unstable-cache"])(

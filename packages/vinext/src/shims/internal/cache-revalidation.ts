@@ -13,7 +13,6 @@ type CacheRevalidation = {
   background: boolean;
   generation: number;
   promise: Promise<unknown>;
-  writes: Map<string, Array<() => Promise<void>>>;
 };
 
 type CacheRevalidationCoordinator = {
@@ -23,7 +22,7 @@ type CacheRevalidationCoordinator = {
 
 type CacheWriteClaim = {
   current: CacheRevalidation;
-  committed: CacheRevalidation | undefined;
+  committed: (() => Promise<void>) | undefined;
 };
 
 type CacheWriteCoordinator = {
@@ -66,7 +65,6 @@ function startCacheRevalidation(
     background,
     generation: ++writeCoordinator.generation,
     promise: Promise.resolve(),
-    writes: new Map(),
   };
   coordinators.set(writeFamily, writeCoordinator);
   return { revalidation, writeCoordinator };
@@ -116,14 +114,12 @@ export function runForegroundCacheRevalidation<T>(
   return trackedRevalidation;
 }
 
-async function repairCurrentWrite(claim: CacheWriteClaim, key: string): Promise<void> {
+async function repairCurrentWrite(claim: CacheWriteClaim): Promise<void> {
   while (true) {
     const current = claim.current;
-    const repairable = current.writes.has(key) ? current : claim.committed;
-    for (const write of repairable?.writes.get(key) ?? []) {
-      await write();
-    }
-    if (claim.current === current) return;
+    const committed = claim.committed;
+    await committed?.();
+    if (claim.current === current && claim.committed === committed) return;
   }
 }
 
@@ -135,9 +131,6 @@ function createLease(
   const isCurrent = () => coordinator.current === revalidation;
   return {
     async write(key, write) {
-      const writes = revalidation.writes.get(key) ?? [];
-      writes.push(write);
-      revalidation.writes.set(key, writes);
       if (revalidation.background && !isCurrent()) return;
 
       let claim = writeCoordinator.claims.get(key);
@@ -152,9 +145,9 @@ function createLease(
 
       await write();
       if (claim.current === revalidation && isCurrent()) {
-        claim.committed = revalidation;
+        claim.committed = write;
       } else {
-        await repairCurrentWrite(claim, key);
+        await repairCurrentWrite(claim);
       }
     },
   };

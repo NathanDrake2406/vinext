@@ -47,7 +47,6 @@ import { VINEXT_RSC_MARKER_HEADER } from "../server/headers.js";
 import { addCollectedRequestTags, getCurrentFetchSoftTags } from "./fetch-cache.js";
 import {
   type CacheRevalidationLease,
-  hasPendingCacheRevalidation,
   runForegroundCacheRevalidation,
   scheduleBackgroundCacheRevalidation,
 } from "./internal/cache-revalidation.js";
@@ -750,8 +749,8 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
       // Both misses and stale refreshes use the same serialization and key-selection
       // path, including root params read by lazy Server Components.
       const refreshSharedCacheEntry = async (
+        lease: CacheRevalidationLease,
         background = false,
-        lease?: CacheRevalidationLease,
       ): Promise<{
         result: TResult;
         effectiveLife: CacheLifeConfig;
@@ -793,9 +792,7 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
                   : cacheKey;
               if (existing?.value) {
                 const deleteEntry = (key: string) =>
-                  lease
-                    ? lease.write(key, () => handler.set(key, null, { fetchCache: true }))
-                    : handler.set(key, null, { fetchCache: true });
+                  lease.write(key, () => handler.set(key, null, { fetchCache: true }));
                 await deleteEntry(finalKey);
                 if (finalKey !== cacheKey) {
                   await deleteEntry(cacheKey);
@@ -849,15 +846,15 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
                   },
                   { ...cacheContext, tags: redirectTags },
                 );
-              await (lease ? lease.write(coarseCacheKey, writeRedirect) : writeRedirect());
+              await lease.write(coarseCacheKey, writeRedirect);
               // Write the useful entry last. A bounded LRU that can retain only
               // one of the pair must keep the specific value, not the redirect.
               cacheValue.data.url = specificCacheKey;
               const writeValue = () => handler.set(specificCacheKey, cacheValue, cacheContext);
-              await (lease ? lease.write(specificCacheKey, writeValue) : writeValue());
+              await lease.write(specificCacheKey, writeValue);
             } else {
               const writeValue = () => handler.set(cacheKey, cacheValue, cacheContext);
-              await (lease ? lease.write(cacheKey, writeValue) : writeValue());
+              await lease.write(cacheKey, writeValue);
             }
           } catch (error) {
             // A handler failure skips caching but must not fail the render.
@@ -919,14 +916,11 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
           : getFunctionCacheRevalidationMode(),
       );
       const refreshSharedCacheEntryInForeground = async (): Promise<TResult> => {
-        const refreshed =
-          existing || hasPendingCacheRevalidation(coordinationKey)
-            ? await runForegroundCacheRevalidation(
-                coordinationKey,
-                (lease) => refreshSharedCacheEntry(false, lease),
-                coarseCacheKey,
-              )
-            : await refreshSharedCacheEntry();
+        const refreshed = await runForegroundCacheRevalidation(
+          coordinationKey,
+          (lease) => refreshSharedCacheEntry(lease),
+          coarseCacheKey,
+        );
         // A joined foreground generation executes only once, but every caller
         // must receive the cache metadata in its own request/cache ALS scope.
         propagateRootParamNamesToParent(refreshed.rootParamNames);
@@ -968,7 +962,7 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
             coordinationKey,
             (lease) =>
               cacheContextStorage.exit(() =>
-                runWithRequestContext(refreshContext, () => refreshSharedCacheEntry(true, lease)),
+                runWithRequestContext(refreshContext, () => refreshSharedCacheEntry(lease, true)),
               ),
             (error) => {
               console.error("[vinext] use cache background revalidation failed:", error);

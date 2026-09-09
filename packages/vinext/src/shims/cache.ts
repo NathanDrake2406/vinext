@@ -26,6 +26,7 @@ import {
 import { getOrCreateAls } from "./internal/als-registry.js";
 import {
   type CacheRevalidationLease,
+  hasPendingCacheRevalidation,
   runForegroundCacheRevalidation,
   scheduleBackgroundCacheRevalidation,
 } from "./internal/cache-revalidation.js";
@@ -540,7 +541,7 @@ async function refreshUnstableCacheResult<Args extends unknown[], Result>(
   cacheKey: string,
   tags: string[],
   revalidateSeconds: number | false | undefined,
-  lease?: CacheRevalidationLease,
+  lease: CacheRevalidationLease,
 ): Promise<Result> {
   const lastModified = Date.now();
   const result = await _unstableCacheAls.run(true, () => fn(...args));
@@ -567,7 +568,7 @@ async function refreshUnstableCacheResult<Args extends unknown[], Result>(
       tags,
       revalidate: revalidateSeconds,
     });
-  await (lease ? lease.write(cacheKey, write) : write());
+  await lease.write(cacheKey, write);
 
   return result;
 }
@@ -625,9 +626,14 @@ export function unstable_cache<T extends (...args: any[]) => Promise<any>>(
           });
       if (revalidateSeconds === 0) {
         // A stable key can outlive the configuration that originally cached it.
-        // Clear the old value and execute without caching, including fresh hits.
-        if (existing?.value) {
-          await getDataCacheHandler().set(cacheKey, null, { fetchCache: true });
+        // Clear it as a foreground generation so an older pending refresh
+        // cannot repopulate this disabled key after the deletion.
+        if (existing?.value || hasPendingCacheRevalidation(cacheKey)) {
+          await runForegroundCacheRevalidation(cacheKey, (lease) =>
+            lease.write(cacheKey, () =>
+              getDataCacheHandler().set(cacheKey, null, { fetchCache: true }),
+            ),
+          );
         }
         return _unstableCacheAls.run(true, () => fn(...args));
       }
