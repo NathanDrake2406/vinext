@@ -33,6 +33,7 @@ import {
   VINEXT_RENDERED_PATH_AND_SEARCH_HEADER,
 } from "../packages/vinext/src/server/headers.js";
 import { applyAppMiddleware } from "../packages/vinext/src/server/app-middleware.js";
+import { renderPagesFallback as renderHybridPagesFallback } from "../packages/vinext/src/server/app-pages-bridge.js";
 import type { NextRequest } from "../packages/vinext/src/shims/server.js";
 import {
   handleMetadataRouteRequest,
@@ -71,6 +72,7 @@ import {
   markFrameworkLinkHeaders,
   serializeResponseStageLinkProvenance,
 } from "../packages/vinext/src/server/app-response-header-provenance.js";
+import { getRequestContext } from "../packages/vinext/src/shims/unified-request-context.js";
 
 type TestRoute = {
   __loadPage?: unknown;
@@ -725,6 +727,65 @@ describe("createAppRscHandler", () => {
       );
 
       expect(response.headers.get("Content-Length")).toBeNull();
+    },
+  );
+
+  it.each(["direct", "response-stage"] as const)(
+    "keeps nested unstable_cache reads enabled in a hybrid Pages API %s fallback",
+    async (mode) => {
+      const observedBypassFlags: boolean[] = [];
+      const renderPagesFallback: NonNullable<HandlerOptions["renderPagesFallback"]> = (options) =>
+        renderHybridPagesFallback(options, {
+          loadPagesEntry: () => ({
+            handleApiRoute: () => {
+              observedBypassFlags.push(getRequestContext().bypassNestedUnstableCacheReads);
+              return new Response("pages-api");
+            },
+          }),
+          buildRequestHeaders: () => null,
+          decodePathParams: (pathname) => pathname,
+          applyRouteHandlerMiddlewareContext: (response) => response,
+          getDraftModeCookieHeader: () => null,
+        });
+      const handler = createHandler({
+        configHeaders: [],
+        matchRequestRoute: () => null,
+        matchRoute: () => null,
+        renderPagesFallback,
+      });
+      const request = new Request("https://example.test/docs/api/hybrid");
+
+      const response =
+        mode === "direct"
+          ? await handler(request, null)
+          : await handler.handleResponseStage(request, null, {
+              allowRscDocumentFallback: false,
+              appRouteMatch: null,
+              buildId: "build-id",
+              cacheability: {
+                policyHeaders: null,
+                probeMode: null,
+                resolvedRoutePathname: "/api/hybrid",
+              },
+              canonicalPathname: "/api/hybrid",
+              cleanPathname: "/api/hybrid",
+              draftModeCookie: null,
+              isDataRequest: false,
+              isRscRequest: false,
+              kind: "hybrid-pages",
+              matchKind: "static",
+              middlewareCookieOverlay: null,
+              preHandlerHeaders: null,
+              protocolVersion: APP_WORKER_RESPONSE_STAGE_PROTOCOL_VERSION,
+              requestOrigin: "https://example.test",
+              requestUrl: request.url,
+              resolvedUrl: "/api/hybrid",
+              resourceKind: "api",
+              scriptNonce: null,
+            });
+
+      await expect(response.text()).resolves.toBe("pages-api");
+      expect(observedBypassFlags).toEqual([false]);
     },
   );
 
