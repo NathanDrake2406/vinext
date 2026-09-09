@@ -33,7 +33,7 @@ describe("function cache revalidation", () => {
     let innerCalls = 0;
     async function innerSource() {
       innerCalls++;
-      return "inner";
+      return `inner:${innerCalls}`;
     }
     const inner = unstable_cache(innerSource, []);
     let outerCalls = 0;
@@ -43,14 +43,15 @@ describe("function cache revalidation", () => {
     }
     const outer = unstable_cache(outerSource, []);
 
+    await expect(inner()).resolves.toBe("inner:1");
     expect(
       await Promise.race([
         outer(),
         new Promise((resolve) => setImmediate(() => resolve("blocked"))),
       ]),
-    ).toBe("outer:inner");
-    await expect(outer()).resolves.toBe("outer:inner");
-    expect(innerCalls).toBe(1);
+    ).toBe("outer:inner:2");
+    await expect(outer()).resolves.toBe("outer:inner:2");
+    expect(innerCalls).toBe(2);
     expect(outerCalls).toBe(1);
   });
 

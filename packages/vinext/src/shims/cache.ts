@@ -610,6 +610,15 @@ export function unstable_cache<T extends (...args: any[]) => Promise<any>>(
       tagHash: tags.length > 0 ? fnv1a64(JSON.stringify(tags)) : null,
     });
 
+    // Next.js bypasses the data-cache lookup for unstable_cache calls nested
+    // inside another unstable_cache callback. The outer entry owns the result;
+    // caching the inner call independently can keep tagged nested data stale
+    // after the outer entry is invalidated.
+    // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/web/spec-extension/unstable-cache.ts
+    if (isInsideUnstableCacheScope()) {
+      return await fn(...args);
+    }
+
     const isDraftMode = isDraftModeEnabled();
     if (!isDraftMode) {
       // Try to get from cache. Stale entries are usable in normal App Router

@@ -6664,7 +6664,7 @@ describe("next/cache shim", () => {
     }
   });
 
-  it("runs unstable_cache background refreshes as isolated work units with foreground nested reads", async () => {
+  it("runs unstable_cache background refreshes as isolated work units with uncached nested reads", async () => {
     const { unstable_cache, setCacheHandler, MemoryCacheHandler } =
       await import("../packages/vinext/src/shims/cache.js");
     const { createRequestContext, runWithRequestContext } =
@@ -6736,15 +6736,11 @@ describe("next/cache shim", () => {
       expect(waitUntilPromises).toHaveLength(1);
       await Promise.all(waitUntilPromises);
 
-      // The detached refresh is a synthetic cache work unit: the nested stale
-      // inner entry is regenerated in the foreground, so the stored outer
-      // value is assembled from fresh nested data instead of the stale inner
-      // entry a "background"-mode read would have served.
+      // Next.js bypasses nested unstable_cache entries. The detached refresh
+      // therefore assembles the outer value from a fresh inner execution.
       expect(outerCalls).toBe(1);
       expect(innerCalls).toBe(1);
-      expect([...setBodies].find(([key]) => key.includes(":swr-nested-inner:"))?.[1]).toBe(
-        JSON.stringify({ v: "inner-fresh" }),
-      );
+      expect([...setBodies].some(([key]) => key.includes(":swr-nested-inner:"))).toBe(false);
       expect([...setBodies].find(([key]) => key.includes(":swr-nested-outer:"))?.[1]).toBe(
         JSON.stringify({ v: { inner: "inner-fresh" } }),
       );
