@@ -43,16 +43,29 @@ describe("function cache revalidation", () => {
     }
     const outer = unstable_cache(outerSource, []);
 
-    await expect(inner()).resolves.toBe("inner:1");
+    const request = createRequestContext({ currentFetchSoftTags: ["_N_T_/page"] });
+    await expect(runWithRequestContext(request, () => inner())).resolves.toBe("inner:1");
     expect(
       await Promise.race([
-        outer(),
+        runWithRequestContext(request, () => outer()),
         new Promise((resolve) => setImmediate(() => resolve("blocked"))),
       ]),
     ).toBe("outer:inner:2");
-    await expect(outer()).resolves.toBe("outer:inner:2");
+    await expect(runWithRequestContext(request, () => outer())).resolves.toBe("outer:inner:2");
     expect(innerCalls).toBe(2);
     expect(outerCalls).toBe(1);
+  });
+
+  it("keeps omitted and empty unstable_cache keyParts distinct", async () => {
+    let value = 1;
+    const source = async () => value;
+    const omitted = unstable_cache(source);
+    const empty = unstable_cache(source, []);
+
+    await expect(omitted()).resolves.toBe(1);
+    value = 2;
+    await expect(empty()).resolves.toBe(2);
+    await expect(omitted()).resolves.toBe(1);
   });
 
   it.each(["fresh", "hit", undefined])(

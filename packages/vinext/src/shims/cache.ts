@@ -589,7 +589,7 @@ export function unstable_cache<T extends (...args: any[]) => Promise<any>>(
   // callback identity prevents nested functions with the same keyParts from
   // sharing one cache entry (and one foreground revalidation promise).
   const functionKey = fnv1a64(fn.toString());
-  const baseKey = keyParts?.length ? `${keyParts.join(":")}:${functionKey}` : functionKey;
+  const baseKey = keyParts ? `${keyParts.join(":")}:${functionKey}` : functionKey;
   const tags = encodeCacheTags(options?.tags ?? []);
   const revalidateSeconds = options?.revalidate;
 
@@ -610,28 +610,26 @@ export function unstable_cache<T extends (...args: any[]) => Promise<any>>(
       tagHash: tags.length > 0 ? fnv1a64(JSON.stringify(tags)) : null,
     });
 
-    // Next.js bypasses the data-cache lookup for unstable_cache calls nested
-    // inside another unstable_cache callback. The outer entry owns the result;
-    // caching the inner call independently can keep tagged nested data stale
-    // after the outer entry is invalidated.
+    // In App Router work, Next.js bypasses the data-cache read for
+    // unstable_cache calls nested inside another unstable_cache callback, but
+    // still recomputes and writes the inner entry. App Router requests always
+    // carry path-derived soft tags; Pages Router calls do not.
     // https://github.com/vercel/next.js/blob/canary/packages/next/src/server/web/spec-extension/unstable-cache.ts
-    if (isInsideUnstableCacheScope()) {
-      return await fn(...args);
-    }
-
+    const softTags = getCurrentFetchSoftTags();
+    const bypassNestedRead = isInsideUnstableCacheScope() && softTags.length > 0;
     const isDraftMode = isDraftModeEnabled();
     if (!isDraftMode) {
       // Try to get from cache. Stale entries are usable in normal App Router
       // requests, but revalidation scopes and unusable states must refresh in
       // the foreground so the caller receives fresh data.
-      const softTags = getCurrentFetchSoftTags();
-      const existing = _hasPendingRevalidatedTag([...tags, ...softTags])
-        ? null
-        : await getDataCacheHandler().get(cacheKey, {
-            kind: "FETCH",
-            tags,
-            softTags,
-          });
+      const existing =
+        bypassNestedRead || _hasPendingRevalidatedTag([...tags, ...softTags])
+          ? null
+          : await getDataCacheHandler().get(cacheKey, {
+              kind: "FETCH",
+              tags,
+              softTags,
+            });
       if (revalidateSeconds === 0) {
         // A stable key can outlive the configuration that originally cached it.
         // Clear it as a foreground generation so an older pending refresh
