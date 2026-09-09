@@ -1,22 +1,35 @@
 import { getRequestExecutionContext } from "../request-context.js";
 
 const PENDING_CACHE_REVALIDATIONS = Symbol.for("vinext.cache.pendingRevalidations");
+const CACHE_WRITE_COORDINATORS = Symbol.for("vinext.cache.writeCoordinators");
 const globalState = globalThis as unknown as Record<PropertyKey, unknown>;
 
 export type CacheRevalidationLease = {
-  write: (write: () => Promise<void>) => Promise<void>;
+  write: (key: string, write: () => Promise<void>) => Promise<void>;
 };
 
 type CacheRevalidation = {
   active: boolean;
   background: boolean;
+  generation: number;
   promise: Promise<unknown>;
-  writes: Array<() => Promise<void>>;
+  writes: Map<string, Array<() => Promise<void>>>;
 };
 
 type CacheRevalidationCoordinator = {
   active: number;
   current: CacheRevalidation;
+};
+
+type CacheWriteClaim = {
+  current: CacheRevalidation;
+  committed: CacheRevalidation | undefined;
+};
+
+type CacheWriteCoordinator = {
+  active: number;
+  generation: number;
+  claims: Map<string, CacheWriteClaim>;
 };
 
 function getPendingCacheRevalidations(): Map<string, CacheRevalidationCoordinator> {
@@ -28,6 +41,44 @@ function getPendingCacheRevalidations(): Map<string, CacheRevalidationCoordinato
   return pending;
 }
 
+function getCacheWriteCoordinators(): Map<string, CacheWriteCoordinator> {
+  const existing = globalState[CACHE_WRITE_COORDINATORS];
+  if (existing instanceof Map) return existing;
+
+  const coordinators = new Map<string, CacheWriteCoordinator>();
+  globalState[CACHE_WRITE_COORDINATORS] = coordinators;
+  return coordinators;
+}
+
+function startCacheRevalidation(
+  background: boolean,
+  writeFamily: string,
+): { revalidation: CacheRevalidation; writeCoordinator: CacheWriteCoordinator } {
+  const coordinators = getCacheWriteCoordinators();
+  const writeCoordinator = coordinators.get(writeFamily) ?? {
+    active: 0,
+    generation: 0,
+    claims: new Map(),
+  };
+  writeCoordinator.active += 1;
+  const revalidation: CacheRevalidation = {
+    active: true,
+    background,
+    generation: ++writeCoordinator.generation,
+    promise: Promise.resolve(),
+    writes: new Map(),
+  };
+  coordinators.set(writeFamily, writeCoordinator);
+  return { revalidation, writeCoordinator };
+}
+
+function finishCacheRevalidation(writeFamily: string, coordinator: CacheWriteCoordinator): void {
+  coordinator.active -= 1;
+  if (coordinator.active === 0 && getCacheWriteCoordinators().get(writeFamily) === coordinator) {
+    getCacheWriteCoordinators().delete(writeFamily);
+  }
+}
+
 export function hasPendingCacheRevalidation(cacheKey: string): boolean {
   return getPendingCacheRevalidations().get(cacheKey)?.current.active === true;
 }
@@ -36,6 +87,7 @@ export function hasPendingCacheRevalidation(cacheKey: string): boolean {
 export function runForegroundCacheRevalidation<T>(
   cacheKey: string,
   refresh: (lease: CacheRevalidationLease) => Promise<T>,
+  writeFamily = cacheKey,
 ): Promise<T> {
   const pending = getPendingCacheRevalidations();
   const existing = pending.get(cacheKey);
@@ -43,12 +95,7 @@ export function runForegroundCacheRevalidation<T>(
     return existing.current.promise as Promise<T>;
   }
 
-  const revalidation: CacheRevalidation = {
-    active: true,
-    background: false,
-    promise: Promise.resolve(),
-    writes: [],
-  };
+  const { revalidation, writeCoordinator } = startCacheRevalidation(false, writeFamily);
   const coordinator = existing ?? { active: 0, current: revalidation };
   coordinator.current = revalidation;
   coordinator.active += 1;
@@ -56,44 +103,58 @@ export function runForegroundCacheRevalidation<T>(
 
   let trackedRevalidation!: Promise<T>;
   trackedRevalidation = Promise.resolve()
-    .then(() => refresh(createLease(coordinator, revalidation)))
+    .then(() => refresh(createLease(coordinator, writeCoordinator, revalidation)))
     .finally(() => {
       revalidation.active = false;
       coordinator.active -= 1;
       if (coordinator.active === 0 && pending.get(cacheKey) === coordinator) {
         pending.delete(cacheKey);
       }
+      finishCacheRevalidation(writeFamily, writeCoordinator);
     });
   revalidation.promise = trackedRevalidation;
   return trackedRevalidation;
 }
 
-async function repairCurrentWrites(coordinator: CacheRevalidationCoordinator): Promise<void> {
+async function repairCurrentWrite(claim: CacheWriteClaim, key: string): Promise<void> {
   while (true) {
-    const current = coordinator.current;
-    for (const write of current.writes) {
+    const current = claim.current;
+    const repairable = current.writes.has(key) ? current : claim.committed;
+    for (const write of repairable?.writes.get(key) ?? []) {
       await write();
     }
-    if (coordinator.current === current) return;
+    if (claim.current === current) return;
   }
 }
 
 function createLease(
   coordinator: CacheRevalidationCoordinator,
+  writeCoordinator: CacheWriteCoordinator,
   revalidation: CacheRevalidation,
 ): CacheRevalidationLease {
   const isCurrent = () => coordinator.current === revalidation;
   return {
-    async write(write) {
-      if (!revalidation.background) {
-        revalidation.writes.push(write);
-      } else if (!isCurrent()) {
+    async write(key, write) {
+      const writes = revalidation.writes.get(key) ?? [];
+      writes.push(write);
+      revalidation.writes.set(key, writes);
+      if (revalidation.background && !isCurrent()) return;
+
+      let claim = writeCoordinator.claims.get(key);
+      if (!claim) {
+        claim = { current: revalidation, committed: undefined };
+        writeCoordinator.claims.set(key, claim);
+      } else if (claim.current.generation < revalidation.generation) {
+        claim.current = revalidation;
+      } else if (claim.current.generation > revalidation.generation) {
         return;
       }
 
       await write();
-      if (!isCurrent()) {
-        await repairCurrentWrites(coordinator);
+      if (claim.current === revalidation && isCurrent()) {
+        claim.committed = revalidation;
+      } else {
+        await repairCurrentWrite(claim, key);
       }
     },
   };
@@ -110,23 +171,19 @@ export function scheduleBackgroundCacheRevalidation(
   cacheKey: string,
   refresh: (lease: CacheRevalidationLease) => Promise<unknown>,
   reportError: (error: unknown) => void,
+  writeFamily = cacheKey,
 ): void {
   const pending = getPendingCacheRevalidations();
   const existing = pending.get(cacheKey);
   if (existing?.current.active) return;
 
-  const revalidation: CacheRevalidation = {
-    active: true,
-    background: true,
-    promise: Promise.resolve(),
-    writes: [],
-  };
+  const { revalidation, writeCoordinator } = startCacheRevalidation(true, writeFamily);
   const coordinator = existing ?? { active: 0, current: revalidation };
   coordinator.current = revalidation;
   coordinator.active += 1;
   pending.set(cacheKey, coordinator);
   const trackedRevalidation = Promise.resolve()
-    .then(() => refresh(createLease(coordinator, revalidation)))
+    .then(() => refresh(createLease(coordinator, writeCoordinator, revalidation)))
     .then(() => undefined)
     .catch((error) => {
       reportError(error);
@@ -137,6 +194,7 @@ export function scheduleBackgroundCacheRevalidation(
       if (coordinator.active === 0 && pending.get(cacheKey) === coordinator) {
         pending.delete(cacheKey);
       }
+      finishCacheRevalidation(writeFamily, writeCoordinator);
     });
   revalidation.promise = trackedRevalidation;
   const executionContext = getRequestExecutionContext();

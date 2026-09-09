@@ -15,6 +15,10 @@ import {
 import { cookies } from "../packages/vinext/src/shims/headers.js";
 import { getRootParam } from "../packages/vinext/src/shims/root-params.js";
 import {
+  runForegroundCacheRevalidation,
+  scheduleBackgroundCacheRevalidation,
+} from "../packages/vinext/src/shims/internal/cache-revalidation.js";
+import {
   createRequestContext,
   runWithRequestContext,
 } from "../packages/vinext/src/shims/unified-request-context.js";
@@ -283,6 +287,119 @@ describe("function cache revalidation", () => {
       }
     },
   );
+
+  it("orders writes to one physical key across different logical coordinators", async () => {
+    let stored = "initial";
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let markStarted = () => {};
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const pending: Promise<unknown>[] = [];
+    void runWithRequestContext(
+      createRequestContext({
+        executionContext: {
+          waitUntil(promise) {
+            pending.push(promise);
+          },
+        },
+      }),
+      () =>
+        scheduleBackgroundCacheRevalidation(
+          "logical:a",
+          (lease) =>
+            lease.write("physical", async () => {
+              markStarted();
+              await gate;
+              stored = "obsolete";
+            }),
+          () => {},
+          "family",
+        ),
+    );
+    await started;
+    await runForegroundCacheRevalidation(
+      "logical:b",
+      (lease) =>
+        lease.write("physical", async () => {
+          stored = "current";
+        }),
+      "family",
+    );
+    release();
+    await Promise.all(pending);
+    expect(stored).toBe("current");
+  });
+
+  it("repairs a late write from the last committed generation while its successor hangs", async () => {
+    let stored = "initial";
+    let releaseOld = () => {};
+    const oldGate = new Promise<void>((resolve) => {
+      releaseOld = resolve;
+    });
+    let markOldStarted = () => {};
+    const oldStarted = new Promise<void>((resolve) => {
+      markOldStarted = resolve;
+    });
+    const pending: Promise<unknown>[] = [];
+    const context = createRequestContext({
+      executionContext: {
+        waitUntil(promise) {
+          pending.push(promise);
+        },
+      },
+    });
+    void runWithRequestContext(context, () =>
+      scheduleBackgroundCacheRevalidation(
+        "logical",
+        (lease) =>
+          lease.write("physical", async () => {
+            markOldStarted();
+            await oldGate;
+            stored = "obsolete";
+          }),
+        () => {},
+      ),
+    );
+    await oldStarted;
+    await runForegroundCacheRevalidation("logical", (lease) =>
+      lease.write("physical", async () => {
+        stored = "current";
+      }),
+    );
+
+    let releaseNext = () => {};
+    const nextGate = new Promise<void>((resolve) => {
+      releaseNext = resolve;
+    });
+    let markNextStarted = () => {};
+    const nextStarted = new Promise<void>((resolve) => {
+      markNextStarted = resolve;
+    });
+    void runWithRequestContext(context, () =>
+      scheduleBackgroundCacheRevalidation(
+        "logical",
+        async (lease) => {
+          markNextStarted();
+          await nextGate;
+          await lease.write("physical", async () => {
+            stored = "latest";
+          });
+        },
+        () => {},
+      ),
+    );
+    await nextStarted;
+    releaseOld();
+    await pending[0];
+    expect(stored).toBe("current");
+    releaseNext();
+    await Promise.all(pending);
+    expect(stored).toBe("latest");
+  });
 
   it.each(["use-cache", "unstable-cache"])(
     "allows another background %s refresh after a foreground fill supersedes a hung refresh",

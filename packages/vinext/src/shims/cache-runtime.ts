@@ -794,7 +794,7 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
               if (existing?.value) {
                 const deleteEntry = (key: string) =>
                   lease
-                    ? lease.write(() => handler.set(key, null, { fetchCache: true }))
+                    ? lease.write(key, () => handler.set(key, null, { fetchCache: true }))
                     : handler.set(key, null, { fetchCache: true });
                 await deleteEntry(finalKey);
                 if (finalKey !== cacheKey) {
@@ -849,15 +849,15 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
                   },
                   { ...cacheContext, tags: redirectTags },
                 );
-              await (lease ? lease.write(writeRedirect) : writeRedirect());
+              await (lease ? lease.write(coarseCacheKey, writeRedirect) : writeRedirect());
               // Write the useful entry last. A bounded LRU that can retain only
               // one of the pair must keep the specific value, not the redirect.
               cacheValue.data.url = specificCacheKey;
               const writeValue = () => handler.set(specificCacheKey, cacheValue, cacheContext);
-              await (lease ? lease.write(writeValue) : writeValue());
+              await (lease ? lease.write(specificCacheKey, writeValue) : writeValue());
             } else {
               const writeValue = () => handler.set(cacheKey, cacheValue, cacheContext);
-              await (lease ? lease.write(writeValue) : writeValue());
+              await (lease ? lease.write(cacheKey, writeValue) : writeValue());
             }
           } catch (error) {
             // A handler failure skips caching but must not fail the render.
@@ -921,8 +921,10 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
       const refreshSharedCacheEntryInForeground = async (): Promise<TResult> => {
         const refreshed =
           existing || hasPendingCacheRevalidation(coordinationKey)
-            ? await runForegroundCacheRevalidation(coordinationKey, (lease) =>
-                refreshSharedCacheEntry(false, lease),
+            ? await runForegroundCacheRevalidation(
+                coordinationKey,
+                (lease) => refreshSharedCacheEntry(false, lease),
+                coarseCacheKey,
               )
             : await refreshSharedCacheEntry();
         // A joined foreground generation executes only once, but every caller
@@ -971,6 +973,7 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
             (error) => {
               console.error("[vinext] use cache background revalidation failed:", error);
             },
+            coarseCacheKey,
           );
         }
         return result;

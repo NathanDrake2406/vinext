@@ -567,7 +567,7 @@ async function refreshUnstableCacheResult<Args extends unknown[], Result>(
       tags,
       revalidate: revalidateSeconds,
     });
-  await (lease ? lease.write(write) : write());
+  await (lease ? lease.write(cacheKey, write) : write());
 
   return result;
 }
