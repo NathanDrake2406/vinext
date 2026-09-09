@@ -284,6 +284,218 @@ describe("function cache revalidation", () => {
     },
   );
 
+  it.each(["use-cache", "unstable-cache"])(
+    "allows another background %s refresh after a foreground fill supersedes a hung refresh",
+    async (api) => {
+      const handler = new MemoryCacheHandler();
+      setCacheHandler(handler);
+      const clock = vi.spyOn(Date, "now").mockReturnValue(100_000);
+      let value = "initial";
+      let releaseOrphan = () => {};
+      const orphanGate = new Promise<void>((resolve) => {
+        releaseOrphan = resolve;
+      });
+      let markOrphanStarted = () => {};
+      const orphanStarted = new Promise<void>((resolve) => {
+        markOrphanStarted = resolve;
+      });
+      let markLatestStarted = () => {};
+      const latestStarted = new Promise<void>((resolve) => {
+        markLatestStarted = resolve;
+      });
+      const source = async () => {
+        const captured = value;
+        if (api === "use-cache") cacheLife({ revalidate: 1, expire: 60 });
+        if (captured === "orphan") {
+          markOrphanStarted();
+          await orphanGate;
+        } else if (captured === "latest") {
+          markLatestStarted();
+        }
+        return captured;
+      };
+      const cached =
+        api === "use-cache"
+          ? registerCachedFunction(source, `hung-refresh:${api}`)
+          : unstable_cache(source, [`hung-refresh:${api}`], { revalidate: 1 });
+      const pending: Promise<unknown>[] = [];
+      const read = (mode: "foreground" | "background") =>
+        runWithRequestContext(
+          createRequestContext({
+            functionCacheRevalidationMode: mode,
+            executionContext: {
+              waitUntil(promise) {
+                pending.push(promise);
+              },
+            },
+          }),
+          cached,
+        );
+
+      expect(await read("background")).toBe("initial");
+      clock.mockReturnValue(102_000);
+      value = "orphan";
+      expect(await read("background")).toBe("initial");
+      await orphanStarted;
+
+      value = "foreground";
+      clock.mockReturnValue(103_000);
+      expect(await read("foreground")).toBe("foreground");
+
+      value = "latest";
+      clock.mockReturnValue(105_000);
+      try {
+        expect(await read("background")).toBe("foreground");
+        expect(
+          await Promise.race([
+            latestStarted.then(() => "started"),
+            new Promise((resolve) => setImmediate(() => resolve("blocked"))),
+          ]),
+        ).toBe("started");
+      } finally {
+        releaseOrphan();
+        await Promise.allSettled(pending);
+      }
+    },
+  );
+
+  it("replays a joined foreground use-cache fill's metadata in every caller context", async () => {
+    setCacheHandler({
+      async get(key) {
+        return {
+          lastModified: 1,
+          cacheState: "expired",
+          value: {
+            kind: "FETCH",
+            data: { headers: {}, body: JSON.stringify("expired"), url: key },
+            tags: [],
+            revalidate: 1,
+          },
+        };
+      },
+      async set() {},
+      async revalidateTag() {},
+    });
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let markStarted = () => {};
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const source = vi.fn(async () => {
+      cacheLife({ stale: 3, revalidate: 7, expire: 70 });
+      cacheTag("joined-fill");
+      markStarted();
+      await gate;
+      return "fresh";
+    });
+    const cached = registerCachedFunction(source, "joined-foreground-metadata");
+    const contexts = [createRequestContext(), createRequestContext()];
+    const first = runWithRequestContext(contexts[0], cached);
+    await started;
+    const second = runWithRequestContext(contexts[1], cached);
+    release();
+    await expect(Promise.all([first, second])).resolves.toEqual(["fresh", "fresh"]);
+    expect(source).toHaveBeenCalledTimes(1);
+    for (const context of contexts) {
+      expect(context.requestScopedCacheLife).toEqual({ stale: 3, revalidate: 7, expire: 70 });
+      expect(context.currentRequestTags).toEqual(["joined-fill"]);
+    }
+  });
+
+  it("prevents an older root-param refresh from overwriting a newer expanded-key fill", async () => {
+    const memory = new MemoryCacheHandler();
+    const coarseKey = "use-cache:root-param-generation-family";
+    const langKey = coarseKey + ':root-params:[["lang","en"]]';
+    const expandedKey = coarseKey + ':root-params:[["lang","en"],["tenant","acme"]]';
+    const clock = vi.spyOn(Date, "now").mockReturnValue(100_000);
+    await memory.set(
+      coarseKey,
+      {
+        kind: "FETCH",
+        data: { headers: { "x-vinext-use-cache-root-params": "1" }, body: "", url: coarseKey },
+        tags: ["__vinext_use_cache_root_param__:lang"],
+        revalidate: 1,
+      },
+      { cacheControl: { revalidate: 1, expire: 60 } },
+    );
+    await memory.set(
+      langKey,
+      {
+        kind: "FETCH",
+        data: { headers: {}, body: JSON.stringify("initial"), url: langKey },
+        revalidate: 1,
+      },
+      { cacheControl: { revalidate: 1, expire: 60 } },
+    );
+    let delayObsoleteRedirect = false;
+    let releaseObsoleteWrite = () => {};
+    const obsoleteWriteGate = new Promise<void>((resolve) => {
+      releaseObsoleteWrite = resolve;
+    });
+    let markObsoleteWriteStarted = () => {};
+    const obsoleteWriteStarted = new Promise<void>((resolve) => {
+      markObsoleteWriteStarted = resolve;
+    });
+    setCacheHandler({
+      get: (key, context) => memory.get(key, context),
+      async set(key, data, context) {
+        if (key === coarseKey && delayObsoleteRedirect) {
+          delayObsoleteRedirect = false;
+          markObsoleteWriteStarted();
+          await obsoleteWriteGate;
+        }
+        await memory.set(key, data, context);
+      },
+      revalidateTag: (tags) => memory.revalidateTag(tags),
+    });
+    const known = Reflect.get(
+      globalThis,
+      Symbol.for("vinext.cacheRuntime.knownRootParamsByFunctionId"),
+    ) as Map<string, Set<string>>;
+    known.delete("root-param-generation-family");
+    let value = "obsolete";
+    const source = async () => {
+      await getRootParam("lang");
+      await getRootParam("tenant");
+      cacheLife({ revalidate: 1, expire: 60 });
+      const captured = value;
+      if (captured === "obsolete") delayObsoleteRedirect = true;
+      return captured;
+    };
+    const cached = registerCachedFunction(source, "root-param-generation-family");
+    const pending: Promise<unknown>[] = [];
+    const read = (mode: "foreground" | "background") =>
+      runWithRequestContext(
+        createRequestContext({
+          rootParams: { lang: "en", tenant: "acme" },
+          functionCacheRevalidationMode: mode,
+          executionContext: {
+            waitUntil(promise) {
+              pending.push(promise);
+            },
+          },
+        }),
+        cached,
+      );
+
+    clock.mockReturnValue(102_000);
+    expect(await read("background")).toBe("initial");
+    await obsoleteWriteStarted;
+    value = "current";
+    clock.mockReturnValue(103_000);
+    expect(await read("foreground")).toBe("current");
+    releaseObsoleteWrite();
+    await Promise.all(pending);
+    const finalEntry = await memory.get(expandedKey, { kind: "FETCH" });
+    expect(finalEntry?.value?.kind).toBe("FETCH");
+    expect(finalEntry?.value?.kind === "FETCH" && JSON.parse(finalEntry.value.data.body)).toBe(
+      "current",
+    );
+  });
+
   it("follows a persisted stale root-param redirect and deduplicates refreshes", async () => {
     const handler = new MemoryCacheHandler();
     setCacheHandler(handler);

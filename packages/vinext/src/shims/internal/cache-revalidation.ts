@@ -29,7 +29,7 @@ function getPendingCacheRevalidations(): Map<string, CacheRevalidationCoordinato
 }
 
 export function hasPendingCacheRevalidation(cacheKey: string): boolean {
-  return getPendingCacheRevalidations().has(cacheKey);
+  return getPendingCacheRevalidations().get(cacheKey)?.current.active === true;
 }
 
 /** Run one foreground fill and supersede any older background refresh. */
@@ -112,7 +112,8 @@ export function scheduleBackgroundCacheRevalidation(
   reportError: (error: unknown) => void,
 ): void {
   const pending = getPendingCacheRevalidations();
-  if (pending.has(cacheKey)) return;
+  const existing = pending.get(cacheKey);
+  if (existing?.current.active) return;
 
   const revalidation: CacheRevalidation = {
     active: true,
@@ -120,7 +121,9 @@ export function scheduleBackgroundCacheRevalidation(
     promise: Promise.resolve(),
     writes: [],
   };
-  const coordinator = { active: 1, current: revalidation };
+  const coordinator = existing ?? { active: 0, current: revalidation };
+  coordinator.current = revalidation;
+  coordinator.active += 1;
   pending.set(cacheKey, coordinator);
   const trackedRevalidation = Promise.resolve()
     .then(() => refresh(createLease(coordinator, revalidation)))

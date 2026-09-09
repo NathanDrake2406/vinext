@@ -736,6 +736,13 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
       const rootParams = getCurrentRootParams();
       const knownRootParamNames = knownRootParamsByFunctionId.get(id);
       const coarseCacheKey = cacheKey;
+      // Root-param dependencies may expand while a refresh is rendering. Use
+      // every available root-param value only for coordination so the key is
+      // stable across that discovery without joining different route variants.
+      const coordinationKey = rootParams
+        ? coarseCacheKey +
+          computeRootParamsCacheKeySuffix(rootParams, new Set(Object.keys(rootParams)))
+        : coarseCacheKey;
       if (knownRootParamNames && rootParams) {
         cacheKey += computeRootParamsCacheKeySuffix(rootParams, knownRootParamNames);
       }
@@ -745,7 +752,12 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
       const refreshSharedCacheEntry = async (
         background = false,
         lease?: CacheRevalidationLease,
-      ): Promise<TResult> => {
+      ): Promise<{
+        result: TResult;
+        effectiveLife: CacheLifeConfig;
+        tags: string[];
+        rootParamNames: Set<string> | undefined;
+      }> => {
         const lastModified = Date.now();
         const { result, ctx, effectiveLife, collectedResult } = await runCachedFunctionWithContext(
           fn,
@@ -759,14 +771,14 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
             ? addKnownRootParamNames(id, ctx.readRootParamNames)
             : knownRootParamsByFunctionId.get(id);
 
-        recordRequestScopedCacheLife(effectiveLife);
-        // Bubble the cache scope's tags up to the surrounding request so the
-        // enclosing page / route-handler ISR entry is tagged for on-demand
-        // revalidation (issue #1453). `ctx.tags` already includes any nested
-        // child cache's tags via `runCachedFunctionWithContext`.
-        propagateCacheTagsToRequest(ctx.tags);
         const revalidateSeconds =
           effectiveLife.revalidate ?? cacheLifeProfiles.default.revalidate ?? 900;
+        const refreshed = (result: TResult) => ({
+          result,
+          effectiveLife,
+          tags: [...ctx.tags],
+          rootParamNames: rootParamNames ? new Set(rootParamNames) : undefined,
+        });
 
         // Serialization ran while the cache ALS was active so lazy Server
         // Component work is reflected in `ctx` before selecting the final key.
@@ -789,7 +801,7 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
                   await deleteEntry(cacheKey);
                 }
               }
-              return collectedResult.result;
+              return refreshed(collectedResult.result);
             }
             const serialized = collectedResult.cacheEntry;
             const cacheValue = {
@@ -858,7 +870,7 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
           }
         }
 
-        return collectedResult ? collectedResult.result : result;
+        return refreshed(collectedResult ? collectedResult.result : result);
       };
 
       // Check cache — deserialize via RSC stream when available, JSON otherwise.
@@ -906,12 +918,20 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
           ? "foreground"
           : getFunctionCacheRevalidationMode(),
       );
-      const refreshSharedCacheEntryInForeground = (): Promise<TResult> =>
-        existing || hasPendingCacheRevalidation(cacheKey)
-          ? runForegroundCacheRevalidation(cacheKey, (lease) =>
-              refreshSharedCacheEntry(false, lease),
-            )
-          : refreshSharedCacheEntry();
+      const refreshSharedCacheEntryInForeground = async (): Promise<TResult> => {
+        const refreshed =
+          existing || hasPendingCacheRevalidation(coordinationKey)
+            ? await runForegroundCacheRevalidation(coordinationKey, (lease) =>
+                refreshSharedCacheEntry(false, lease),
+              )
+            : await refreshSharedCacheEntry();
+        // A joined foreground generation executes only once, but every caller
+        // must receive the cache metadata in its own request/cache ALS scope.
+        propagateRootParamNamesToParent(refreshed.rootParamNames);
+        recordRequestScopedCacheControl(refreshed.effectiveLife);
+        propagateCacheTagsToRequest(refreshed.tags);
+        return refreshed.result;
+      };
       if (
         existing?.value?.kind === "FETCH" &&
         !isRootParamRedirect(existing) &&
@@ -943,7 +963,7 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
         if (cacheReadAction === "serve-and-revalidate") {
           const refreshContext = createCacheRevalidationContext(softTags);
           scheduleBackgroundCacheRevalidation(
-            cacheKey,
+            coordinationKey,
             (lease) =>
               cacheContextStorage.exit(() =>
                 runWithRequestContext(refreshContext, () => refreshSharedCacheEntry(true, lease)),
@@ -1004,7 +1024,9 @@ function throwPrivateUseCacheInsideUnstableCacheError(): never {
   throw error;
 }
 
-function recordRequestScopedCacheControl(cacheControl: CacheControlMetadata | undefined): void {
+function recordRequestScopedCacheControl(
+  cacheControl: CacheControlMetadata | CacheLifeConfig | undefined,
+): void {
   if (cacheControl === undefined) return;
   // A hit must contribute the same claim its producing execution did — both to
   // the request scope and, when nested, to the enclosing cache scope (like the
