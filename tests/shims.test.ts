@@ -6742,10 +6742,10 @@ describe("next/cache shim", () => {
       // entry a "background"-mode read would have served.
       expect(outerCalls).toBe(1);
       expect(innerCalls).toBe(1);
-      expect(setBodies.get("unstable_cache:v2:swr-nested-inner:[]")).toBe(
+      expect([...setBodies].find(([key]) => key.includes(":swr-nested-inner:"))?.[1]).toBe(
         JSON.stringify({ v: "inner-fresh" }),
       );
-      expect(setBodies.get("unstable_cache:v2:swr-nested-outer:[]")).toBe(
+      expect([...setBodies].find(([key]) => key.includes(":swr-nested-outer:"))?.[1]).toBe(
         JSON.stringify({ v: { inner: "inner-fresh" } }),
       );
 
@@ -7414,14 +7414,14 @@ describe('"use cache" runtime', () => {
     const { createRequestContext, runWithRequestContext } =
       await import("../packages/vinext/src/shims/unified-request-context.js");
 
-    const childKey =
+    const isChildKey = (key: string) =>
       childKind === "use cache"
-        ? "use-cache:test:swr-nested-child"
-        : "unstable_cache:v2:swr-nested-child:[]";
-    const outerKey =
+        ? key === "use-cache:test:swr-nested-child"
+        : key.includes(":swr-nested-child:");
+    const isOuterKey = (key: string) =>
       outerKind === "use cache"
-        ? "use-cache:test:swr-nested-outer"
-        : "unstable_cache:v2:swr-nested-outer:[]";
+        ? key === "use-cache:test:swr-nested-outer"
+        : key.includes(":swr-nested-outer:");
 
     const staleChild = {
       lastModified: Date.now() - 2_000,
@@ -7434,7 +7434,7 @@ describe('"use cache" runtime', () => {
           body: JSON.stringify(
             childKind === "use cache" ? { child: "stale" } : { v: { child: "stale" } },
           ),
-          url: childKey,
+          url: "child",
         },
         tags: [],
         revalidate: 5,
@@ -7446,7 +7446,7 @@ describe('"use cache" runtime', () => {
       // Child key is a stale hit; outer key is a miss so the outer executes and
       // embeds the served child value.
       async get(key) {
-        return key === childKey ? staleChild : null;
+        return isChildKey(key) ? staleChild : null;
       },
       set: setEntry,
       async revalidateTag() {},
@@ -7487,7 +7487,7 @@ describe('"use cache" runtime', () => {
         c: { child: "fresh" },
       });
       expect(waitUntilCalls).toHaveLength(0);
-      const outerSet = setEntry.mock.calls.find(([key]) => key === outerKey);
+      const outerSet = setEntry.mock.calls.find(([key]) => isOuterKey(key));
       expect(outerSet).toBeDefined();
       expect(outerSet![1]).toMatchObject({
         data: {

@@ -585,12 +585,11 @@ export function unstable_cache<T extends (...args: any[]) => Promise<any>>(
   keyParts?: string[],
   options?: UnstableCacheOptions,
 ): T {
-  const baseKey = keyParts ? keyParts.join(":") : fnv1a64(fn.toString());
-  // Warning: fn.toString() as a cache key is minification-sensitive. In
-  // production builds where the function body is mangled, two logically
-  // different functions may hash to the same key, or the same function may
-  // hash differently across builds. Always pass explicit keyParts in
-  // production to get a stable, collision-free cache key.
+  // Next.js includes both the callback source and keyParts. Keeping the
+  // callback identity prevents nested functions with the same keyParts from
+  // sharing one cache entry (and one foreground revalidation promise).
+  const functionKey = fnv1a64(fn.toString());
+  const baseKey = keyParts?.length ? `${keyParts.join(":")}:${functionKey}` : functionKey;
   const tags = encodeCacheTags(options?.tags ?? []);
   const revalidateSeconds = options?.revalidate;
 

@@ -29,6 +29,31 @@ afterEach(() => {
 });
 
 describe("function cache revalidation", () => {
+  it("keeps nested unstable_cache functions with identical keyParts distinct", async () => {
+    let innerCalls = 0;
+    async function innerSource() {
+      innerCalls++;
+      return "inner";
+    }
+    const inner = unstable_cache(innerSource, []);
+    let outerCalls = 0;
+    async function outerSource() {
+      outerCalls++;
+      return `outer:${await inner()}`;
+    }
+    const outer = unstable_cache(outerSource, []);
+
+    expect(
+      await Promise.race([
+        outer(),
+        new Promise((resolve) => setImmediate(() => resolve("blocked"))),
+      ]),
+    ).toBe("outer:inner");
+    await expect(outer()).resolves.toBe("outer:inner");
+    expect(innerCalls).toBe(1);
+    expect(outerCalls).toBe(1);
+  });
+
   it.each(["fresh", "hit", undefined])(
     "accepts custom handler hit state %s for both cache APIs",
     async (cacheState) => {
@@ -137,11 +162,14 @@ describe("function cache revalidation", () => {
           }),
           fn,
         );
-      const old = unstable_cache(async () => 1, keyParts, { revalidate: 1 });
+      let disabled = false;
+      let value = 1;
+      const source = async () => (disabled ? ++value : 1);
+      const old = unstable_cache(source, keyParts, { revalidate: 1 });
       expect(await read(old)).toBe(1);
       if (state === "stale") clock.mockReturnValue(102_000);
-      let value = 1;
-      const uncached = unstable_cache(async () => ++value, keyParts, { revalidate: 0 });
+      disabled = true;
+      const uncached = unstable_cache(source, keyParts, { revalidate: 0 });
       try {
         expect(await read(uncached)).toBe(2);
         const writes = vi.spyOn(handler, "set");
@@ -503,6 +531,7 @@ describe("function cache revalidation", () => {
     const oldWriteStarted = new Promise<void>((resolve) => {
       markOldWriteStarted = resolve;
     });
+    let cacheKey = "";
     setCacheHandler({
       async get(key, context) {
         if (forceMiss) {
@@ -512,6 +541,7 @@ describe("function cache revalidation", () => {
         return get(key, context);
       },
       async set(key, data, context) {
+        if (key.includes(":zero-supersedes:")) cacheKey = key;
         if (data?.kind === "FETCH" && data.data.body.includes("obsolete")) {
           markOldWriteStarted();
           await oldWriteGate;
@@ -522,8 +552,10 @@ describe("function cache revalidation", () => {
     });
     const clock = vi.spyOn(Date, "now").mockReturnValue(100_000);
     let value = "initial";
-    const positive = unstable_cache(async () => value, ["zero-supersedes"], { revalidate: 1 });
-    const disabled = unstable_cache(async () => "uncached", ["zero-supersedes"], {
+    let disabled = false;
+    const source = async () => (disabled ? "uncached" : value);
+    const positive = unstable_cache(source, ["zero-supersedes"], { revalidate: 1 });
+    const disabledCache = unstable_cache(source, ["zero-supersedes"], {
       revalidate: 0,
     });
     const pending: Promise<unknown>[] = [];
@@ -548,10 +580,12 @@ describe("function cache revalidation", () => {
     value = "current";
     expect(await read(positive, "foreground")).toBe("current");
     forceMiss = true;
-    expect(await read(disabled)).toBe("uncached");
+    disabled = true;
+    expect(await read(disabledCache)).toBe("uncached");
     releaseOldWrite();
     await Promise.all(pending);
-    expect(await memory.get("unstable_cache:v2:zero-supersedes:[]", { kind: "FETCH" })).toBeNull();
+    expect(cacheKey).not.toBe("");
+    expect(await memory.get(cacheKey, { kind: "FETCH" })).toBeNull();
   });
 
   it("keeps zero-revalidate use cache disabled after a forced miss during an older write", async () => {
