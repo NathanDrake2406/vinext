@@ -547,6 +547,7 @@ async function refreshUnstableCacheResult<Args extends unknown[], Result>(
   lease: CacheRevalidationLease,
 ): Promise<Result> {
   const lastModified = Date.now();
+  const handler = getDataCacheHandler();
   const result = await _unstableCacheAls.run(true, () => fn(...args));
 
   const cacheValue: CachedFetchValue = {
@@ -565,13 +566,13 @@ async function refreshUnstableCacheResult<Args extends unknown[], Result>(
   };
 
   const write = () =>
-    getDataCacheHandler().set(cacheKey, cacheValue, {
+    handler.set(cacheKey, cacheValue, {
       fetchCache: true,
       lastModified,
       tags,
       revalidate: revalidateSeconds,
     });
-  await lease.write(cacheKey, write);
+  await lease.write(cacheKey, write, () => handler.set(cacheKey, null, { fetchCache: true }));
 
   return result;
 }

@@ -5,7 +5,7 @@ const CACHE_WRITE_COORDINATORS = Symbol.for("vinext.cache.writeCoordinators");
 const globalState = globalThis as unknown as Record<PropertyKey, unknown>;
 
 export type CacheRevalidationLease = {
-  write: (key: string, write: () => Promise<void>) => Promise<void>;
+  write: (key: string, write: () => Promise<void>, discard?: () => Promise<void>) => Promise<void>;
 };
 
 type CacheRevalidation = {
@@ -23,6 +23,7 @@ type CacheRevalidationCoordinator = {
 type CacheWriteClaim = {
   current: CacheRevalidation;
   committed: (() => Promise<void>) | undefined;
+  discard: (() => Promise<void>) | undefined;
 };
 
 type CacheWriteCoordinator = {
@@ -119,18 +120,22 @@ export function runUncoalescedForegroundCacheRevalidation<T>(
   writeFamily: string,
   refresh: (lease: CacheRevalidationLease) => Promise<T>,
 ): Promise<T> {
-  const { revalidation, writeCoordinator } = startCacheRevalidation(false, writeFamily);
-  const coordinator = { active: 1, current: revalidation };
-  let trackedRevalidation!: Promise<T>;
-  trackedRevalidation = Promise.resolve()
-    .then(() => refresh(createLease(coordinator, writeCoordinator, revalidation)))
-    .finally(() => {
-      revalidation.active = false;
-      coordinator.active -= 1;
-      finishCacheRevalidation(writeFamily, writeCoordinator);
-    });
-  revalidation.promise = trackedRevalidation;
-  return trackedRevalidation;
+  return refresh({
+    async write(key, write, discard) {
+      // Nested App Router computations are intentionally not coalesced. Claim
+      // the physical write only when the computation finishes so, like
+      // Next.js, the latest completed callback owns the cached value.
+      const { revalidation, writeCoordinator } = startCacheRevalidation(false, writeFamily);
+      const coordinator = { active: 1, current: revalidation };
+      try {
+        await createLease(coordinator, writeCoordinator, revalidation).write(key, write, discard);
+      } finally {
+        revalidation.active = false;
+        coordinator.active -= 1;
+        finishCacheRevalidation(writeFamily, writeCoordinator);
+      }
+    },
+  });
 }
 
 async function repairCurrentWrite(claim: CacheWriteClaim): Promise<void> {
@@ -149,15 +154,16 @@ function createLease(
 ): CacheRevalidationLease {
   const isCurrent = () => coordinator.current === revalidation;
   return {
-    async write(key, write) {
+    async write(key, write, discard) {
       if (revalidation.background && !isCurrent()) return;
 
       let claim = writeCoordinator.claims.get(key);
       if (!claim) {
-        claim = { current: revalidation, committed: undefined };
+        claim = { current: revalidation, committed: undefined, discard };
         writeCoordinator.claims.set(key, claim);
       } else if (claim.current.generation < revalidation.generation) {
         claim.current = revalidation;
+        claim.discard = discard;
       } else if (claim.current.generation > revalidation.generation) {
         return;
       }
@@ -165,8 +171,17 @@ function createLease(
       await write();
       if (claim.current === revalidation && isCurrent()) {
         claim.committed = write;
+        claim.discard = discard;
       } else {
-        await repairCurrentWrite(claim);
+        // The obsolete callback has already touched storage. Remove those
+        // bytes before replaying the current write, then detach the replay so
+        // a failed or hung handler cannot leak coordinator state forever.
+        await claim.discard?.();
+        const repair = repairCurrentWrite(claim).catch((error) => {
+          console.error("[vinext] cache write repair failed:", error);
+        });
+        const executionContext = getRequestExecutionContext();
+        if (executionContext) executionContext.waitUntil(repair);
       }
     },
   };

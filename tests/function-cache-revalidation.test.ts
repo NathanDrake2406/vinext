@@ -15,6 +15,7 @@ import {
 import { cookies } from "../packages/vinext/src/shims/headers.js";
 import { getRootParam } from "../packages/vinext/src/shims/root-params.js";
 import {
+  hasPendingCacheWrites,
   runForegroundCacheRevalidation,
   scheduleBackgroundCacheRevalidation,
 } from "../packages/vinext/src/shims/internal/cache-revalidation.js";
@@ -70,12 +71,32 @@ describe("function cache revalidation", () => {
 
   it("runs concurrent nested App Router unstable_cache callbacks independently", async () => {
     let calls = 0;
-    const inner = unstable_cache(async () => ++calls, ["concurrent-nested"]);
+    let releaseFirst = () => {};
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let markFirstStarted = () => {};
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve;
+    });
+    const inner = unstable_cache(async () => {
+      const call = ++calls;
+      if (call === 1) {
+        markFirstStarted();
+        await firstGate;
+      }
+      return call;
+    }, ["concurrent-nested"]);
     const outer = unstable_cache(() => Promise.all([inner(), inner()]), ["concurrent-outer"]);
     const request = createRequestContext({ bypassNestedUnstableCacheReads: true });
 
-    await expect(runWithRequestContext(request, () => outer())).resolves.toEqual([1, 2]);
+    const result = runWithRequestContext(request, () => outer());
+    await firstStarted;
+    await new Promise((resolve) => setImmediate(resolve));
+    releaseFirst();
+    await expect(result).resolves.toEqual([1, 2]);
     expect(calls).toBe(2);
+    await expect(runWithRequestContext(request, () => inner())).resolves.toBe(1);
   });
 
   it("retains nested unstable_cache reads in Pages Router work", async () => {
@@ -577,6 +598,68 @@ describe("function cache revalidation", () => {
     await Promise.all(pending);
     expect(stored).toBe("latest");
   });
+
+  it.each(["rejects", "hangs"])(
+    "discards an obsolete late write when the current repair %s",
+    async (mode) => {
+      let stored: string | null = "initial";
+      let releaseOld = () => {};
+      const oldGate = new Promise<void>((resolve) => {
+        releaseOld = resolve;
+      });
+      let markOldStarted = () => {};
+      const oldStarted = new Promise<void>((resolve) => {
+        markOldStarted = resolve;
+      });
+      const pending: Promise<unknown>[] = [];
+      const context = createRequestContext({
+        executionContext: {
+          waitUntil(promise) {
+            pending.push(promise);
+          },
+        },
+      });
+      void runWithRequestContext(context, () =>
+        scheduleBackgroundCacheRevalidation(
+          "repair-failure",
+          (lease) =>
+            lease.write("physical", async () => {
+              markOldStarted();
+              await oldGate;
+              stored = "obsolete";
+            }),
+          () => {},
+        ),
+      );
+      await oldStarted;
+      let currentWrites = 0;
+      const never = new Promise<void>(() => {});
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      await runForegroundCacheRevalidation("repair-failure", (lease) =>
+        lease.write(
+          "physical",
+          async () => {
+            currentWrites++;
+            if (currentWrites > 1) {
+              if (mode === "rejects") throw new Error("repair failed");
+              await never;
+            }
+            stored = "current";
+          },
+          async () => {
+            stored = null;
+          },
+        ),
+      );
+
+      releaseOld();
+      await pending[0];
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(stored).toBeNull();
+      expect(hasPendingCacheWrites("repair-failure")).toBe(false);
+      if (mode === "rejects") expect(error).toHaveBeenCalledOnce();
+    },
+  );
 
   it("keeps zero-revalidate unstable_cache disabled after an older write completes", async () => {
     const memory = new MemoryCacheHandler();
