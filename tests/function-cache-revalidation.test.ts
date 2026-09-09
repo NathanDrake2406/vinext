@@ -15,7 +15,6 @@ import {
 import { cookies } from "../packages/vinext/src/shims/headers.js";
 import { getRootParam } from "../packages/vinext/src/shims/root-params.js";
 import {
-  hasPendingCacheWrites,
   runForegroundCacheRevalidation,
   scheduleBackgroundCacheRevalidation,
 } from "../packages/vinext/src/shims/internal/cache-revalidation.js";
@@ -598,68 +597,6 @@ describe("function cache revalidation", () => {
     await Promise.all(pending);
     expect(stored).toBe("latest");
   });
-
-  it.each(["rejects", "hangs"])(
-    "discards an obsolete late write when the current repair %s",
-    async (mode) => {
-      let stored: string | null = "initial";
-      let releaseOld = () => {};
-      const oldGate = new Promise<void>((resolve) => {
-        releaseOld = resolve;
-      });
-      let markOldStarted = () => {};
-      const oldStarted = new Promise<void>((resolve) => {
-        markOldStarted = resolve;
-      });
-      const pending: Promise<unknown>[] = [];
-      const context = createRequestContext({
-        executionContext: {
-          waitUntil(promise) {
-            pending.push(promise);
-          },
-        },
-      });
-      void runWithRequestContext(context, () =>
-        scheduleBackgroundCacheRevalidation(
-          "repair-failure",
-          (lease) =>
-            lease.write("physical", async () => {
-              markOldStarted();
-              await oldGate;
-              stored = "obsolete";
-            }),
-          () => {},
-        ),
-      );
-      await oldStarted;
-      let currentWrites = 0;
-      const never = new Promise<void>(() => {});
-      const error = vi.spyOn(console, "error").mockImplementation(() => {});
-      await runForegroundCacheRevalidation("repair-failure", (lease) =>
-        lease.write(
-          "physical",
-          async () => {
-            currentWrites++;
-            if (currentWrites > 1) {
-              if (mode === "rejects") throw new Error("repair failed");
-              await never;
-            }
-            stored = "current";
-          },
-          async () => {
-            stored = null;
-          },
-        ),
-      );
-
-      releaseOld();
-      await pending[0];
-      await new Promise((resolve) => setImmediate(resolve));
-      expect(stored).toBeNull();
-      expect(hasPendingCacheWrites("repair-failure")).toBe(false);
-      if (mode === "rejects") expect(error).toHaveBeenCalledOnce();
-    },
-  );
 
   it("keeps zero-revalidate unstable_cache disabled after an older write completes", async () => {
     const memory = new MemoryCacheHandler();

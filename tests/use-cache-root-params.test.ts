@@ -199,9 +199,7 @@ describe('"use cache" root-param entry generation', () => {
       ]);
       await Promise.all(pending);
       expect(calls).toBe(4);
-      // Each request tracks its background refresh plus any detached repair
-      // needed to preserve completion ordering for the shared redirect key.
-      expect(pending).toHaveLength(4);
+      expect(pending).toHaveLength(2);
       for (const ctx of contexts) {
         expect(ctx.currentRequestTags).toEqual(["content-old"]);
         expect(ctx.requestScopedCacheLife).toEqual({ stale: 30, revalidate: 60, expire: 600 });

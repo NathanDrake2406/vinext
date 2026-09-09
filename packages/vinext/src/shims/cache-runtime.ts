@@ -847,21 +847,15 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
                   },
                   { ...cacheContext, tags: redirectTags },
                 );
-              await lease.write(coarseCacheKey, writeRedirect, () =>
-                handler.set(coarseCacheKey, null, { fetchCache: true }),
-              );
+              await lease.write(coarseCacheKey, writeRedirect);
               // Write the useful entry last. A bounded LRU that can retain only
               // one of the pair must keep the specific value, not the redirect.
               cacheValue.data.url = specificCacheKey;
               const writeValue = () => handler.set(specificCacheKey, cacheValue, cacheContext);
-              await lease.write(specificCacheKey, writeValue, () =>
-                handler.set(specificCacheKey, null, { fetchCache: true }),
-              );
+              await lease.write(specificCacheKey, writeValue);
             } else {
               const writeValue = () => handler.set(cacheKey, cacheValue, cacheContext);
-              await lease.write(cacheKey, writeValue, () =>
-                handler.set(cacheKey, null, { fetchCache: true }),
-              );
+              await lease.write(cacheKey, writeValue);
             }
           } catch (error) {
             // A handler failure skips caching but must not fail the render.
