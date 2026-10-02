@@ -17,8 +17,8 @@ describe("React cache scope runner", () => {
       // Flight needs this global to keep its request current across an await;
       // @vitejs/plugin-rsc injects it in real builds.
       globalThis.AsyncLocalStorage = AsyncLocalStorage;
-      const { renderToReadableStream } = await import(
-        "./node_modules/@vitejs/plugin-rsc/dist/vendor/react-server-dom/server.edge.js"
+      const { prerender } = await import(
+        "./node_modules/@vitejs/plugin-rsc/dist/vendor/react-server-dom/static.edge.js"
       );
 
       const vite = await createServer({
@@ -37,7 +37,7 @@ describe("React cache scope runner", () => {
           "/packages/vinext/src/server/app-page-probe.ts",
         );
         const runWithReactCacheScope = createReactCacheScopeRunner((model, options) =>
-          renderToReadableStream(model, null, options),
+          prerender(model, null, options),
         );
 
         const getStore = React.cache(() => ({ locale: undefined }));
@@ -83,8 +83,17 @@ describe("React cache scope runner", () => {
         });
         const cacheSignal = { abortedInsideScope, abortedAfterScope: signal.aborted };
 
+        const hooks = await runWithReactCacheScope(async () => {
+          try {
+            React.useId();
+            return "live";
+          } catch {
+            return "unavailable";
+          }
+        });
+
         process.stdout.write(
-          JSON.stringify({ unscoped, scoped, result, nextScope, rejection, cacheSignal }),
+          JSON.stringify({ unscoped, scoped, result, nextScope, rejection, cacheSignal, hooks }),
         );
       } finally {
         await vite.close();
@@ -110,6 +119,8 @@ describe("React cache scope runner", () => {
       rejection: "probe failed",
       // The scope's render has finished by the time the runner settles.
       cacheSignal: { abortedInsideScope: false, abortedAfterScope: true },
+      // As in an unscoped probe: the work never runs in Flight's hook pass.
+      hooks: "unavailable",
     });
   });
 });

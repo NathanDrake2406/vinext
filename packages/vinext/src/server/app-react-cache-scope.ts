@@ -2,10 +2,10 @@ import { createElement, type ReactNode } from "react";
 
 export type ReactCacheScopeRunner = <T>(run: () => Promise<T>) => Promise<T>;
 
-type ReactCacheScopeRenderer = (
+type ReactCacheScopePrerenderer = (
   element: ReactNode,
   options: { onError: (error: unknown) => void },
-) => ReadableStream<Uint8Array>;
+) => Promise<{ prelude: ReadableStream<Uint8Array> }>;
 
 type ReactCacheScopeOutcome<T> = { ok: true; value: T } | { ok: false; error: unknown };
 
@@ -14,11 +14,15 @@ type ReactCacheScopeOutcome<T> = { ok: true; value: T } | { ok: false; error: un
  *
  * `cache()` only memoizes while a Flight request is current, and probes call
  * server components before the real render exists. React has no API to open a
- * cache scope, so the work is hosted in a throwaway Flight render. The runner
- * settles once that render has finished.
+ * cache scope, so the work is hosted in a throwaway Flight prerender. The
+ * runner settles once that prerender has finished.
+ *
+ * It takes Flight's `prerender`, not `renderToReadableStream`: a streaming
+ * render resumes awaited work on a timer, which delays every scope whose work
+ * does real I/O by about a millisecond.
  */
 export function createReactCacheScopeRunner(
-  renderToReadableStream: ReactCacheScopeRenderer,
+  prerender: ReactCacheScopePrerenderer,
 ): ReactCacheScopeRunner {
   return async <T>(run: () => Promise<T>): Promise<T> => {
     let outcome: ReactCacheScopeOutcome<T> | undefined;
@@ -35,18 +39,21 @@ export function createReactCacheScopeRunner(
       return null;
     }
 
-    const stream = renderToReadableStream(createElement(ReactCacheScopeHost), {
+    const { prelude } = await prerender(createElement(ReactCacheScopeHost), {
       onError(error) {
         renderError ??= { error };
       },
     });
-    const reader = stream.getReader();
+    // Flight ends the cache's lifetime once its output has been read.
+    const reader = prelude.getReader();
     while (!(await reader.read()).done) {
-      // Only the end of the render matters.
+      // The host renders nothing.
     }
 
     if (outcome === undefined) {
-      throw renderError?.error ?? new Error("React cache scope render ended before its work ran");
+      throw (
+        renderError?.error ?? new Error("React cache scope prerender ended before its work ran")
+      );
     }
     if (!outcome.ok) {
       throw outcome.error;

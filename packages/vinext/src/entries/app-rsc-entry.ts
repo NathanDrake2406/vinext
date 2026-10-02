@@ -727,8 +727,10 @@ import { createRscPrerenderer, createRscRenderer } from ${JSON.stringify(rscStre
 import { createReactCacheScopeRunner as __createReactCacheScopeRunner } from ${JSON.stringify(appReactCacheScopePath)};
 
 const renderToReadableStream = createRscRenderer(_renderToReadableStream);
-const __runWithReactCacheScope = __createReactCacheScopeRunner(_renderToReadableStream);
 const prerenderToReadableStream = createRscPrerenderer(async (model, options) =>
+  _prerender(model, _createClientManifest(), options),
+);
+const __runWithReactCacheScope = __createReactCacheScopeRunner((model, options) =>
   _prerender(model, _createClientManifest(), options),
 );
 import { createElement } from "react";
