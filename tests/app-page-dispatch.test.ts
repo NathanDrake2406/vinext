@@ -494,6 +494,7 @@ function createDispatchOptions(overrides: CreateDispatchOptionsOverrides = {}) {
     resolveRouteStaticEligible:
       overrides.resolveRouteStaticEligible ?? ((candidate) => !candidate.isDynamic),
     route,
+    runWithReactCacheScope: <T>(run: () => Promise<T>) => run(),
     runWithSuppressedHookWarning<T>(probe: () => Promise<T>) {
       return probe();
     },

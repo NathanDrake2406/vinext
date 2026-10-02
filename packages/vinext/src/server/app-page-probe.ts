@@ -13,6 +13,7 @@ import {
   type LayoutFlags,
 } from "./app-page-execution.js";
 import { makeObservedAppPageSearchParamsThenable } from "./app-page-search-params-observation.js";
+import type { ReactCacheScopeRunner } from "./app-react-cache-scope.js";
 import { isPromiseLike } from "../utils/promise.js";
 
 const DEFAULT_SUBTREE_PROBE_MAX_DEPTH = 32;
@@ -445,6 +446,7 @@ type ProbeAppPageBeforeRenderOptions = {
   ) => Promise<Response>;
   renderPageSpecialError: (specialError: AppPageSpecialError) => Promise<Response>;
   resolveSpecialError: (error: unknown) => AppPageSpecialError | null;
+  runWithReactCacheScope: ReactCacheScopeRunner;
   runWithSuppressedHookWarning<T>(probe: () => Promise<T>): Promise<T>;
   /** When provided, enables per-layout static/dynamic classification. */
   classification?: LayoutClassificationOptions | null;
@@ -453,11 +455,20 @@ type ProbeAppPageBeforeRenderOptions = {
 export async function probeAppPageBeforeRender(
   options: ProbeAppPageBeforeRenderOptions,
 ): Promise<ProbeAppPageBeforeRenderResult> {
-  let layoutFlags: LayoutFlags = {};
-
   if (options.skipProbes) {
-    return { response: null, layoutFlags };
+    return { response: null, layoutFlags: {} };
   }
+
+  // One scope spans the layout and page probes because the real render uses one
+  // React cache for the whole tree, so a `cache()` value computed while probing
+  // a layout is the same one the page probe reads.
+  return options.runWithReactCacheScope(() => probeAppPageLayoutsThenPage(options));
+}
+
+async function probeAppPageLayoutsThenPage(
+  options: ProbeAppPageBeforeRenderOptions,
+): Promise<ProbeAppPageBeforeRenderResult> {
+  let layoutFlags: LayoutFlags = {};
 
   // Layouts render before their children in Next.js, so layout-level special
   // errors must be handled before probing the page component itself.
