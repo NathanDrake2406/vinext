@@ -106,7 +106,7 @@ describe("React cache scope runner", () => {
       {
         cwd: process.cwd(),
         env: { ...process.env, NODE_ENV: "production" },
-        timeout: 10_000,
+        timeout: 25_000,
       },
     );
 
@@ -122,5 +122,6 @@ describe("React cache scope runner", () => {
       // As in an unscoped probe: the work never runs in Flight's hook pass.
       hooks: "unavailable",
     });
-  });
+    // The subprocess starts a Vite server, which is slow on a cold CI runner.
+  }, 30_000);
 });
