@@ -1,9 +1,8 @@
 import { cache } from "react";
 import { headers } from "next/headers";
 
-// The shape next-intl's static rendering uses: a layout or page stores the
-// locale in a React cache() value, and components below read it, falling back
-// to a request header only when nothing was stored.
+// Mirrors next-intl's static rendering: the locale lives in a React cache()
+// value, with a request-header fallback when nothing was stored.
 const getRequestLocaleStore = cache((): { locale: string | undefined } => ({
   locale: undefined,
 }));

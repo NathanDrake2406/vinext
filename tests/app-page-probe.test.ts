@@ -157,7 +157,7 @@ describe("app page probe helpers", () => {
     expect(sharedChildren.next().value).toMatchObject({ type: Child });
   });
 
-  it("probes the layouts and the page inside one React cache scope", async () => {
+  it("probes each layout and the page in a separate React cache scope", async () => {
     const events: string[] = [];
 
     await probeAppPageBeforeRender({
@@ -187,7 +187,17 @@ describe("app page probe helpers", () => {
       },
     });
 
-    expect(events).toEqual(["scope:open", "layout:1", "layout:0", "page", "scope:close"]);
+    expect(events).toEqual([
+      "scope:open",
+      "layout:1",
+      "scope:close",
+      "scope:open",
+      "layout:0",
+      "scope:close",
+      "scope:open",
+      "page",
+      "scope:close",
+    ]);
   });
 
   it("handles layout special errors before probing the page", async () => {

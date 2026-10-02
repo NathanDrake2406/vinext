@@ -1369,10 +1369,9 @@ describe("prerenderApp — default mode (app-basic)", () => {
   );
 
   // https://github.com/cloudflare/vinext/issues/3671
-  // A layout and page store the locale in a React cache() value and the
-  // components below read it, as next-intl's setRequestLocale() does. The
-  // pre-render probe has to see that value too, or the readers fall back to
-  // headers() and the route is skipped as dynamic.
+  // Components read a locale stored above them through React cache(), as with
+  // next-intl's setRequestLocale(). The probe must see it too, or the readers
+  // fall back to headers() and the route is skipped as dynamic.
   it.each(["en", "es"])(
     "prerenders components that read a React cache() value stored above them (%s)",
     (locale) => {

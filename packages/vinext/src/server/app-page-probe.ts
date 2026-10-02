@@ -455,20 +455,19 @@ type ProbeAppPageBeforeRenderOptions = {
 export async function probeAppPageBeforeRender(
   options: ProbeAppPageBeforeRenderOptions,
 ): Promise<ProbeAppPageBeforeRenderResult> {
+  let layoutFlags: LayoutFlags = {};
+
   if (options.skipProbes) {
-    return { response: null, layoutFlags: {} };
+    return { response: null, layoutFlags };
   }
 
-  // One scope spans the layout and page probes because the real render uses one
-  // React cache for the whole tree, so a `cache()` value computed while probing
-  // a layout is the same one the page probe reads.
-  return options.runWithReactCacheScope(() => probeAppPageLayoutsThenPage(options));
-}
-
-async function probeAppPageLayoutsThenPage(
-  options: ProbeAppPageBeforeRenderOptions,
-): Promise<ProbeAppPageBeforeRenderResult> {
-  let layoutFlags: LayoutFlags = {};
+  // One React cache per probe. Layouts are probed separately, deepest first,
+  // so a shared cache would leak a deeper layout's `cache()` state into a
+  // shallower layout that renders before it.
+  const probeLayoutAt = (layoutIndex: number): Promise<unknown> =>
+    options.runWithReactCacheScope(async () => options.probeLayoutAt(layoutIndex));
+  const probePage = (): Promise<unknown> =>
+    options.runWithReactCacheScope(async () => options.probePage());
 
   // Layouts render before their children in Next.js, so layout-level special
   // errors must be handled before probing the page component itself.
@@ -483,7 +482,7 @@ async function probeAppPageLayoutsThenPage(
 
         return options.renderLayoutSpecialError(specialError, layoutIndex);
       },
-      probeLayoutAt: options.probeLayoutAt,
+      probeLayoutAt,
       runWithSuppressedHookWarning(probe) {
         return options.runWithSuppressedHookWarning(probe);
       },
@@ -527,7 +526,7 @@ async function probeAppPageLayoutsThenPage(
       // The real RSC/SSR render path will surface those properly below.
       return null;
     },
-    probePage: options.probePage,
+    probePage,
     runWithSuppressedHookWarning(probe) {
       return options.runWithSuppressedHookWarning(probe);
     },

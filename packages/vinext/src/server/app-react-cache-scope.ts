@@ -7,50 +7,50 @@ type ReactCacheScopeRenderer = (
   options: { onError: (error: unknown) => void },
 ) => ReadableStream<Uint8Array>;
 
+type ReactCacheScopeOutcome<T> = { ok: true; value: T } | { ok: false; error: unknown };
+
 /**
- * Builds a runner that executes work inside its own React request cache.
+ * Runs work inside its own React request cache.
  *
- * React's `cache()` only memoizes while a Flight request is current; anywhere
- * else every call computes a fresh value. Probes invoke server components as
- * plain functions before the real render exists, so a value one component
- * stores through `cache()` (next-intl's `setRequestLocale()`) is invisible to
- * the next component the probe walks, which then takes its request-API
- * fallback and marks a static route dynamic.
- *
- * React exposes no API to open a cache scope, so the work is hosted in a
- * throwaway Flight render: the request React creates for it is what `cache()`
- * resolves for everything the work awaits. Each call gets a separate request,
- * so nothing is shared with the real render or with another scope.
+ * `cache()` only memoizes while a Flight request is current, and probes call
+ * server components before the real render exists. React has no API to open a
+ * cache scope, so the work is hosted in a throwaway Flight render. The runner
+ * settles once that render has finished.
  */
 export function createReactCacheScopeRunner(
   renderToReadableStream: ReactCacheScopeRenderer,
 ): ReactCacheScopeRunner {
-  return <T>(run: () => Promise<T>): Promise<T> =>
-    new Promise<T>((resolve, reject) => {
-      async function ReactCacheScopeHost(): Promise<null> {
-        // Leave Flight's synchronous render pass first. Inside it hooks are
-        // live, so the first component the work calls would behave differently
-        // from every one it reaches after an await.
-        await Promise.resolve();
-        try {
-          resolve(await run());
-        } catch (error) {
-          reject(error);
-        }
-        return null;
+  return async <T>(run: () => Promise<T>): Promise<T> => {
+    let outcome: ReactCacheScopeOutcome<T> | undefined;
+    let renderError: { error: unknown } | undefined;
+
+    async function ReactCacheScopeHost(): Promise<null> {
+      // Leave Flight's synchronous pass first: hooks are live only there.
+      await Promise.resolve();
+      try {
+        outcome = { ok: true, value: await run() };
+      } catch (error) {
+        outcome = { ok: false, error };
       }
+      return null;
+    }
 
-      const stream = renderToReadableStream(createElement(ReactCacheScopeHost), {
-        onError: reject,
-      });
-      // Flight keeps the request alive until its output is consumed.
-      drainStream(stream).catch(reject);
+    const stream = renderToReadableStream(createElement(ReactCacheScopeHost), {
+      onError(error) {
+        renderError ??= { error };
+      },
     });
-}
+    const reader = stream.getReader();
+    while (!(await reader.read()).done) {
+      // Only the end of the render matters.
+    }
 
-async function drainStream(stream: ReadableStream<Uint8Array>): Promise<void> {
-  const reader = stream.getReader();
-  while (!(await reader.read()).done) {
-    // The host renders nothing; only completion matters.
-  }
+    if (outcome === undefined) {
+      throw renderError?.error ?? new Error("React cache scope render ended before its work ran");
+    }
+    if (!outcome.ok) {
+      throw outcome.error;
+    }
+    return outcome.value;
+  };
 }

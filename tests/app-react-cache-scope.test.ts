@@ -7,16 +7,15 @@ const execFileAsync = promisify(execFile);
 describe("React cache scope runner", () => {
   // https://github.com/cloudflare/vinext/issues/3671
   it("gives probed server components one React cache per scope", async () => {
-    // React's cache() only memoizes in the react-server build with a Flight
-    // request current, so this runs the real probe walker against real Flight
-    // in a react-server subprocess. Vitest's React build never caches.
+    // cache() only memoizes in the react-server build, so this runs the real
+    // probe walker against real Flight in a react-server subprocess.
     const script = String.raw`
       import { AsyncLocalStorage } from "node:async_hooks";
       import React from "react";
       import { createServer } from "vite";
 
-      // @vitejs/plugin-rsc injects this global into the Flight bundle it builds;
-      // Flight needs it to keep its request current across an await.
+      // Flight needs this global to keep its request current across an await;
+      // @vitejs/plugin-rsc injects it in real builds.
       globalThis.AsyncLocalStorage = AsyncLocalStorage;
       const { renderToReadableStream } = await import(
         "./node_modules/@vitejs/plugin-rsc/dist/vendor/react-server-dom/server.edge.js"
@@ -77,7 +76,16 @@ describe("React cache scope runner", () => {
           throw new Error("probe failed");
         }).catch((error) => error.message);
 
-        process.stdout.write(JSON.stringify({ unscoped, scoped, result, nextScope, rejection }));
+        let signal;
+        const abortedInsideScope = await runWithReactCacheScope(async () => {
+          signal = React.cacheSignal();
+          return signal.aborted;
+        });
+        const cacheSignal = { abortedInsideScope, abortedAfterScope: signal.aborted };
+
+        process.stdout.write(
+          JSON.stringify({ unscoped, scoped, result, nextScope, rejection, cacheSignal }),
+        );
       } finally {
         await vite.close();
       }
@@ -100,6 +108,8 @@ describe("React cache scope runner", () => {
       result: "probed",
       nextScope: ["next-scope:unset"],
       rejection: "probe failed",
+      // The scope's render has finished by the time the runner settles.
+      cacheSignal: { abortedInsideScope: false, abortedAfterScope: true },
     });
   });
 });
