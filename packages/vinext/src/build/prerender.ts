@@ -27,6 +27,7 @@ import { buildPregeneratedConcretePathTable } from "../server/prerender-manifest
 import { normalizeTrailingSlashPathname } from "../server/request-pipeline.js";
 import {
   isRewriteCachePathnameOf,
+  PRERENDER_CACHE_IDENTITY_REQUEST,
   readPrerenderCacheIdentityHeader,
 } from "../server/app-rewrite-cache-identity.js";
 import { BLOCKED_PAGES } from "vinext/shims/constants";
@@ -49,6 +50,7 @@ import {
   NEXT_CACHE_TAGS_HEADER,
   VINEXT_CACHE_HEADER,
   VINEXT_METADATA_ROUTE_CACHE_HEADER,
+  VINEXT_PRERENDER_CACHE_IDENTITY_HEADER,
   VINEXT_PRERENDER_CACHE_LIFE_HEADER,
   VINEXT_PRERENDER_REWRITTEN_HEADER,
   VINEXT_PRERENDER_METADATA_ROUTES_PATH,
@@ -84,7 +86,7 @@ import {
   markAppPprDynamicFallbackShellHtml,
 } from "../server/app-ppr-fallback-shell.js";
 import { enterPrerenderPhase } from "./prerender-phase.js";
-import { collectRewriteSourcePathnames } from "./prerender-rewrite-sources.js";
+import { collectRewriteSources } from "./prerender-rewrite-sources.js";
 import { buildAppRouteCacheValue } from "../server/app-route-handler-response.js";
 export { readPrerenderSecret } from "./server-manifest.js";
 
@@ -1828,23 +1830,11 @@ export async function prerenderApp({
     // that its own entry exists. A static export has no server to rewrite a
     // request, and its output directory is public.
     if (mode !== "export") {
-      const rewriteSourceUrls: UrlToRender[] = [];
-      // The source pathname names the artifact files. On a file system that
-      // ignores letter case, two sources that differ only by case share one
-      // file, so the build renders only the first of them.
-      const sourceByFoldedPathname = new Map<string, string>();
-      for (const page of urlsToRender) {
-        // A fallback shell has a placeholder path that no visitor requests.
-        if (page.isFallback) continue;
-        for (const rewriteSourcePath of collectRewriteSourcePathnames(page.urlPath, config)) {
-          const foldedPathname = rewriteSourcePath.toLowerCase();
-          const queuedPathname = sourceByFoldedPathname.get(foldedPathname);
-          if (queuedPathname !== undefined && queuedPathname !== rewriteSourcePath) continue;
-          sourceByFoldedPathname.set(foldedPathname, rewriteSourcePath);
-          rewriteSourceUrls.push({ ...page, rewriteSourcePath });
-        }
+      // A fallback shell has a placeholder path that no visitor requests.
+      const pages = urlsToRender.filter((page) => !page.isFallback);
+      for (const { page, sourcePathname } of collectRewriteSources(pages, config, routes)) {
+        urlsToRender.push({ ...page, rewriteSourcePath: sourcePathname });
       }
-      urlsToRender.push(...rewriteSourceUrls);
     }
 
     if (metadataRoutes.length > 0) {
@@ -1993,6 +1983,12 @@ export async function prerenderApp({
         }
         if (isSpeculative) {
           htmlHeaders.set(VINEXT_PRERENDER_SPECULATIVE_HEADER, "1");
+        }
+        // Ask the handler to confirm how it resolved this source URL. Only this
+        // request gets the confirmation header, so no other prerender response
+        // changes.
+        if (rewriteSourcePath !== undefined) {
+          htmlHeaders.set(VINEXT_PRERENDER_CACHE_IDENTITY_HEADER, PRERENDER_CACHE_IDENTITY_REQUEST);
         }
         // Match Next.js's export worker: when trailingSlash is enabled, render
         // the canonical slash form instead of letting the request pipeline
@@ -2207,7 +2203,10 @@ export async function prerenderApp({
           ...(rewrite ? { rewrite } : {}),
         };
       } catch (e) {
-        renderPool?.recordRenderError(e);
+        // A rewritten source URL is optional output. Its failed request must
+        // not stop the build: a response with a very long confirmation header
+        // fails in fetch. A worker that exits is still seen by assertHealthy().
+        if (rewriteSourcePath === undefined) renderPool?.recordRenderError(e);
         if (isSpeculative) {
           return { route: routePattern, status: "skipped", reason: "dynamic" };
         }

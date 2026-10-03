@@ -30,10 +30,14 @@ import {
   VINEXT_INTERCEPTION_ID_HEADER,
   VINEXT_MW_CTX_HEADER,
   VINEXT_PARAMS_HEADER,
+  VINEXT_PRERENDER_CACHE_IDENTITY_HEADER,
   VINEXT_RENDERED_PATH_AND_SEARCH_HEADER,
 } from "../packages/vinext/src/server/headers.js";
 import { applyAppMiddleware } from "../packages/vinext/src/server/app-middleware.js";
-import { readPrerenderCacheIdentityHeader } from "../packages/vinext/src/server/app-rewrite-cache-identity.js";
+import {
+  PRERENDER_CACHE_IDENTITY_REQUEST,
+  readPrerenderCacheIdentityHeader,
+} from "../packages/vinext/src/server/app-rewrite-cache-identity.js";
 import type { NextRequest } from "../packages/vinext/src/shims/server.js";
 import {
   handleMetadataRouteRequest,
@@ -2694,7 +2698,7 @@ describe("createAppRscHandler", () => {
     expect(response.headers.get("Cache-Control")).toBe("public, s-maxage=3600");
   });
 
-  it("reports the cache identity of a rewritten page render to the prerender only", async () => {
+  it("confirms the cache identity of a rewritten page render only when the prerender asks", async () => {
     const route = createPageRoute();
     const matchAbout = (pathname: string) => (pathname === "/about" ? { params: {}, route } : null);
     const handler = createHandler({
@@ -2707,18 +2711,23 @@ describe("createAppRscHandler", () => {
       matchRequestRoute: matchAbout,
       matchRoute: matchAbout,
     });
-    const identity = async (pathname: string) =>
+    const identity = async (pathname: string, headers: Record<string, string> = {}) =>
       readPrerenderCacheIdentityHeader(
-        (await handler(new Request(`https://example.test/docs${pathname}`), null)).headers,
+        (await handler(new Request(`https://example.test/docs${pathname}`, { headers }), null))
+          .headers,
       );
+    const asked = { [VINEXT_PRERENDER_CACHE_IDENTITY_HEADER]: PRERENDER_CACHE_IDENTITY_REQUEST };
 
     try {
       // A runtime response does not carry the build side channel.
-      expect(await identity("/alias")).toBeNull();
+      expect(await identity("/alias", asked)).toBeNull();
       vi.stubEnv("VINEXT_PRERENDER", "1");
-      expect(await identity("/alias")).toBe("/alias?__vinext_rewrite=%2Fabout");
+      expect(await identity("/alias", asked)).toBe("/alias?__vinext_rewrite=%2Fabout");
+      // The header grows with the pathname. A prerender response that the
+      // build did not ask about must stay as it was before.
+      expect(await identity("/alias")).toBeNull();
       // The identity of an unrewritten request is its own URL.
-      expect(await identity("/about")).toBeNull();
+      expect(await identity("/about", asked)).toBeNull();
     } finally {
       vi.unstubAllEnvs();
     }

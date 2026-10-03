@@ -14286,8 +14286,10 @@ describe("proxyExternalRequest", () => {
       await import("../packages/vinext/src/config/config-matchers.js");
 
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = async () =>
-      new Response("proxied body", {
+    let forwardedHeaders: Headers | undefined;
+    globalThis.fetch = async (_url: any, init: any) => {
+      forwardedHeaders = init.headers;
+      return new Response("proxied body", {
         headers: {
           "x-upstream": "true",
           // The build takes this header as the request handler's own answer.
@@ -14296,12 +14298,18 @@ describe("proxyExternalRequest", () => {
           ),
         },
       });
+    };
 
     try {
       const response = await proxyExternalRequest(
-        new Request("http://localhost:3000/about"),
+        // The build asks its own request handler, not the upstream origin.
+        new Request("http://localhost:3000/about", {
+          headers: { "x-vinext-prerender-cache-identity": "1", "user-agent": "vinext-test" },
+        }),
         "https://upstream.example/landing",
       );
+      expect(forwardedHeaders?.get("user-agent")).toBe("vinext-test");
+      expect(forwardedHeaders?.has("x-vinext-prerender-cache-identity")).toBe(false);
       expect(response.headers.get("x-upstream")).toBe("true");
       expect(response.headers.has("x-vinext-prerender-cache-identity")).toBe(false);
     } finally {

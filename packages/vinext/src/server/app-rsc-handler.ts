@@ -129,6 +129,7 @@ import {
 import {
   appRewriteCachePathname,
   applyPrerenderCacheIdentityHeader,
+  isPrerenderCacheIdentityRequested,
 } from "./app-rewrite-cache-identity.js";
 import {
   matchPrerenderRouteParamsPayload,
@@ -2518,15 +2519,16 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   if (isProgressiveActionRender) {
     return applyProgressiveActionSideEffects(pageResponse, progressiveActionFormState);
   }
-  // The build cannot tell from a URL how this handler resolves it. Confirm the
-  // cache pathname of a rewritten page render, so the prerender seeds it only
-  // under the key that runtime requests for the same source URL read. The
-  // build seeds only a successful render.
+  // The build cannot tell from a URL how this handler resolves it. When the
+  // build asks, confirm the cache pathname of a rewritten page render, so the
+  // prerender seeds it only under the key that runtime requests for the same
+  // source URL read. The build seeds only a successful render.
   if (
     !cleanPathnameIsRequestPathname &&
     pageResponse.ok &&
     typeof process !== "undefined" &&
-    process.env?.VINEXT_PRERENDER === "1"
+    process.env?.VINEXT_PRERENDER === "1" &&
+    isPrerenderCacheIdentityRequested(request.headers)
   ) {
     applyPrerenderCacheIdentityHeader(pageResponse.headers, cachePathname);
   }

@@ -1122,10 +1122,12 @@ export function rewriteSourceForDestination(
     if (groups.size !== captures.size) return null;
     destinationRegex = `^${destinationRegex}${escapeRegExp(destination.slice(lastIndex))}$`;
     // An unsafe constraint must not run. The source matcher warns about it.
-    if (!isSafeRegex(destinationRegex)) return null;
+    // The source matcher ignores letter case, so a constraint must do so here.
+    // The forward check below still compares the destination exactly.
+    if (!isSafeRegex(destinationRegex, "i")) return null;
     let matched: RegExpExecArray | null;
     try {
-      const compiled = new RegExp(destinationRegex);
+      const compiled = new RegExp(destinationRegex, "i");
       matched = compiled.exec(target) ?? compiled.exec(`${target}/`);
     } catch {
       return null;
@@ -1443,6 +1445,7 @@ export async function proxyExternalRequest(
   // used only by vinext's own prerender pipeline.
   headers.delete(VINEXT_PRERENDER_SECRET_HEADER);
   headers.delete(VINEXT_PRERENDER_ROUTE_PARAMS_HEADER);
+  headers.delete(VINEXT_PRERENDER_CACHE_IDENTITY_HEADER);
   // On-demand revalidation is an internal authenticated request. Config and
   // middleware rewrites may legitimately proxy ordinary requests externally,
   // but the credential, its companion control header, and the authenticated

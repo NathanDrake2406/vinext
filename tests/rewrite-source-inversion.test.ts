@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { collectRewriteSourcePathnames } from "../packages/vinext/src/build/prerender-rewrite-sources.js";
+import {
+  collectRewriteSourcePathnames,
+  collectRewriteSources,
+} from "../packages/vinext/src/build/prerender-rewrite-sources.js";
 import {
   matchRewrite,
   rewriteSourceForDestination,
@@ -64,6 +67,13 @@ describe("rewriteSourceForDestination", () => {
       { source: "/:a/:b", destination: "/x/:b/:a" },
       "/x/1/2",
       "/2/1",
+    ],
+    // The runtime matches a source without regard to letter case.
+    [
+      "a constraint that the value matches only without regard to letter case",
+      { source: "/docs/:slug([a-z0-9-]+)", destination: "/en/guide/:slug" },
+      "/en/guide/Getting-Started",
+      "/docs/Getting-Started",
     ],
   ])("inverts %s", (_label, rewrite, destinationPathname, sourcePathname) => {
     expect(rewriteSourceForDestination(rewrite, destinationPathname)).toBe(sourcePathname);
@@ -142,41 +152,95 @@ describe("rewriteSourceForDestination", () => {
 describe("collectRewriteSourcePathnames", () => {
   it("collects each source pathname one time from all rewrite phases", () => {
     expect(
-      collectRewriteSourcePathnames("/en/about", {
-        basePath: "",
-        rewrites: {
-          beforeFiles: [{ source: "/a", destination: "/en/about" }],
-          afterFiles: [
-            { source: "/a", destination: "/en/about" },
-            { source: "/b", destination: "/en/about" },
-            { source: "/other", destination: "/en/contact" },
-          ],
-          fallback: [{ source: "/c", destination: "/en/about" }],
+      collectRewriteSourcePathnames(
+        "/en/about",
+        {
+          basePath: "",
+          rewrites: {
+            beforeFiles: [{ source: "/a", destination: "/en/about" }],
+            afterFiles: [
+              { source: "/a", destination: "/en/about" },
+              { source: "/b", destination: "/en/about" },
+              { source: "/other", destination: "/en/contact" },
+            ],
+            fallback: [{ source: "/c", destination: "/en/about" }],
+          },
         },
-      }),
+        [],
+      ),
     ).toEqual(["/a", "/b", "/c"]);
   });
 
   it("leaves out a source pathname when an external rewrite takes the build request first", () => {
     expect(
-      collectRewriteSourcePathnames("/en/about", {
-        basePath: "",
-        rewrites: {
-          beforeFiles: [
-            {
-              source: "/about",
-              missing: [{ type: "cookie", key: "session" }],
-              destination: "https://upstream.example/landing",
-            },
-          ],
-          afterFiles: [
-            { source: "/about", destination: "/en/about" },
-            { source: "/info", destination: "/en/about" },
-          ],
-          fallback: [],
+      collectRewriteSourcePathnames(
+        "/en/about",
+        {
+          basePath: "",
+          rewrites: {
+            beforeFiles: [
+              {
+                source: "/about",
+                missing: [{ type: "cookie", key: "session" }],
+                destination: "https://upstream.example/landing",
+              },
+            ],
+            afterFiles: [
+              { source: "/about", destination: "/en/about" },
+              { source: "/info", destination: "/en/about" },
+            ],
+            fallback: [],
+          },
         },
-      }),
+        [],
+      ),
     ).toEqual(["/info"]);
+  });
+
+  // A request for a pathname runs what owns it. A route handler at `/feed`
+  // must not run during the build because a page exists at `/en/feed`.
+  describe("a pathname that a route owns", () => {
+    const rule = { source: "/:name", destination: "/en/:name" };
+    const routes = [
+      { pattern: "/feed", isDynamic: false },
+      { pattern: "/:locale/feed", isDynamic: true },
+    ];
+    const sources = (
+      rewrites: Partial<Record<"beforeFiles" | "afterFiles" | "fallback", [typeof rule]>>,
+    ) =>
+      collectRewriteSourcePathnames(
+        "/en/feed",
+        { basePath: "", rewrites: { beforeFiles: [], afterFiles: [], fallback: [], ...rewrites } },
+        routes,
+      );
+
+    it("is a source of a beforeFiles rule, which runs before the route", () => {
+      expect(sources({ beforeFiles: [rule] })).toEqual(["/feed"]);
+    });
+
+    it("is not a source of an afterFiles rule when a route without params owns it", () => {
+      expect(sources({ afterFiles: [rule] })).toEqual([]);
+    });
+
+    it("is a source of an afterFiles rule when only a dynamic route matches it", () => {
+      expect(
+        collectRewriteSourcePathnames(
+          "/en/about",
+          { basePath: "", rewrites: { beforeFiles: [], afterFiles: [rule], fallback: [] } },
+          [{ pattern: "/:locale", isDynamic: true }],
+        ),
+      ).toEqual(["/about"]);
+    });
+
+    it("is not a source of a fallback rule when a dynamic route matches it", () => {
+      expect(
+        collectRewriteSourcePathnames(
+          "/en/about",
+          { basePath: "", rewrites: { beforeFiles: [], afterFiles: [], fallback: [rule] } },
+          [{ pattern: "/:locale", isDynamic: true }],
+        ),
+      ).toEqual([]);
+    });
   });
 
   it.each<[string, Parameters<typeof collectRewriteSourcePathnames>[1]]>([
@@ -225,7 +289,57 @@ describe("collectRewriteSourcePathnames", () => {
       },
     ],
   ])("keeps a source pathname when an external rewrite %s", (_label, config) => {
-    expect(collectRewriteSourcePathnames("/en/about", config)).toEqual(["/about"]);
+    expect(collectRewriteSourcePathnames("/en/about", config, [])).toEqual(["/about"]);
+  });
+});
+
+describe("collectRewriteSources", () => {
+  it("keeps one source pathname as a candidate of each page that a rule maps it to", () => {
+    // The first rule takes `/pricing` at runtime, so only the request handler
+    // can tell that `/en/plans` is the page. Both candidates must be requested.
+    const pages = [{ urlPath: "/en/pricing" }, { urlPath: "/en/plans" }];
+    expect(
+      collectRewriteSources(
+        pages,
+        {
+          basePath: "",
+          rewrites: {
+            beforeFiles: [],
+            afterFiles: [
+              { source: "/pricing", destination: "/en/plans" },
+              { source: "/:name", destination: "/en/:name" },
+            ],
+            fallback: [],
+          },
+        },
+        [],
+      ),
+    ).toEqual([
+      { page: pages[0], sourcePathname: "/pricing" },
+      { page: pages[1], sourcePathname: "/pricing" },
+      { page: pages[1], sourcePathname: "/plans" },
+    ]);
+  });
+
+  it("keeps the first of the source pathnames that differ only by letter case", () => {
+    const pages = [{ urlPath: "/en/about" }];
+    expect(
+      collectRewriteSources(
+        pages,
+        {
+          basePath: "",
+          rewrites: {
+            beforeFiles: [],
+            afterFiles: [
+              { source: "/About", destination: "/en/about" },
+              { source: "/about", destination: "/en/about" },
+            ],
+            fallback: [],
+          },
+        },
+        [],
+      ),
+    ).toEqual([{ page: pages[0], sourcePathname: "/About" }]);
   });
 });
 
@@ -257,17 +371,6 @@ describe("prerender cache identity header", () => {
     const cachePathname = "/blog/café?__vinext_rewrite=%2Fen%2Fblog%2Fcaf%25C3%25A9";
     applyPrerenderCacheIdentityHeader(headers, cachePathname);
     expect(readPrerenderCacheIdentityHeader(headers)).toBe(cachePathname);
-  });
-
-  it("does not set a header that can exceed the response header limit of fetch", () => {
-    // Node's fetch rejects a response with more than about 16 KB of headers.
-    // The build must still get the page response, so no header is the answer.
-    const headers = new Headers();
-    applyPrerenderCacheIdentityHeader(
-      headers,
-      `/${"中".repeat(600)}?__vinext_rewrite=%2Fen%2F${"%25E4%25B8%25AD".repeat(600)}`,
-    );
-    expect(readPrerenderCacheIdentityHeader(headers)).toBeNull();
   });
 });
 

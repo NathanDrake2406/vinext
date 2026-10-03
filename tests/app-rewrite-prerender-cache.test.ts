@@ -126,6 +126,7 @@ describe.each([
     let routes: ManifestRoute[] = [];
     let server: Server | undefined;
     let baseUrl = "";
+    let routeHandlerCallsDuringBuild = "";
 
     const url = (pathname: string) => {
       if (pathname === "/") return `${baseUrl}${basePath}${trailingSlash || !basePath ? "/" : ""}`;
@@ -133,6 +134,12 @@ describe.each([
     };
 
     beforeAll(async () => {
+      const routeHandlerLog = path.join(
+        fs.mkdtempSync(path.join(os.tmpdir(), "vinext-rewrite-route-handler-")),
+        "calls.log",
+      );
+      fs.writeFileSync(routeHandlerLog, "");
+      process.env.VINEXT_TEST_ROUTE_HANDLER_LOG = routeHandlerLog;
       ({ root, routes } = await buildFixture(
         `export default {
   basePath: ${JSON.stringify(basePath)},
@@ -165,6 +172,16 @@ describe.each([
           "app/[locale]/contact/page.tsx": LOCALE_PAGE("contact", 2),
           "app/[locale]/shop/page.tsx": LOCALE_PAGE("shop", 2),
           "app/[locale]/legacy/page.tsx": LOCALE_PAGE("legacy", 2),
+          // `/hook` is a rewrite source of this page by its pattern, but a
+          // route handler owns that URL. The handler records each call.
+          "app/[locale]/hook/page.tsx": LOCALE_PAGE("hook", 2),
+          "app/hook/route.ts": `import fs from "node:fs";
+
+export function GET() {
+  fs.appendFileSync(process.env.VINEXT_TEST_ROUTE_HANDLER_LOG, "GET /hook\\n");
+  return new Response("hook route handler");
+}
+`,
           // The runtime gives a rewritten page the percent-encoded form of a
           // captured param, so the title lookup accepts both forms.
           "app/[locale]/blog/[slug]/page.tsx": `const TITLES: Record<string, string> = {
@@ -188,10 +205,24 @@ export default async function Page({ params }: { params: Promise<{ slug: string 
 `,
         },
       ));
+      routeHandlerCallsDuringBuild = fs.readFileSync(routeHandlerLog, "utf8");
       ({ server, baseUrl } = await startServer(root));
     }, 180_000);
 
-    afterAll(() => stop(server, root));
+    afterAll(async () => {
+      await stop(server, root);
+      const routeHandlerLog = process.env.VINEXT_TEST_ROUTE_HANDLER_LOG;
+      delete process.env.VINEXT_TEST_ROUTE_HANDLER_LOG;
+      if (routeHandlerLog) fs.rmSync(path.dirname(routeHandlerLog), { recursive: true });
+    });
+
+    it("does not run a route handler that owns a rewrite source URL during the build", async () => {
+      expect(routeHandlerCallsDuringBuild).toBe("");
+
+      const response = await fetch(url("/hook"));
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("hook route handler");
+    });
 
     it("serves the prerendered destination URL as a cache hit", async () => {
       const response = await fetch(url("/en/about"));
