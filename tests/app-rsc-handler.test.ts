@@ -33,6 +33,7 @@ import {
   VINEXT_RENDERED_PATH_AND_SEARCH_HEADER,
 } from "../packages/vinext/src/server/headers.js";
 import { applyAppMiddleware } from "../packages/vinext/src/server/app-middleware.js";
+import { readPrerenderCacheIdentityHeader } from "../packages/vinext/src/server/app-rewrite-cache-identity.js";
 import type { NextRequest } from "../packages/vinext/src/shims/server.js";
 import {
   handleMetadataRouteRequest,
@@ -2691,6 +2692,36 @@ describe("createAppRscHandler", () => {
     });
     expect(dispatchResponseStage.mock.calls[0]?.[2]).toEqual({ cache: "shared" });
     expect(response.headers.get("Cache-Control")).toBe("public, s-maxage=3600");
+  });
+
+  it("reports the cache identity of a rewritten page render to the prerender only", async () => {
+    const route = createPageRoute();
+    const matchAbout = (pathname: string) => (pathname === "/about" ? { params: {}, route } : null);
+    const handler = createHandler({
+      configHeaders: [],
+      configRewrites: {
+        beforeFiles: [{ source: "/alias", destination: "/about" }],
+        afterFiles: [],
+        fallback: [],
+      },
+      matchRequestRoute: matchAbout,
+      matchRoute: matchAbout,
+    });
+    const identity = async (pathname: string) =>
+      readPrerenderCacheIdentityHeader(
+        (await handler(new Request(`https://example.test/docs${pathname}`), null)).headers,
+      );
+
+    try {
+      // A runtime response does not carry the build side channel.
+      expect(await identity("/alias")).toBeNull();
+      vi.stubEnv("VINEXT_PRERENDER", "1");
+      expect(await identity("/alias")).toBe("/alias?__vinext_rewrite=%2Fabout");
+      // The identity of an unrewritten request is its own URL.
+      expect(await identity("/about")).toBeNull();
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it.each([

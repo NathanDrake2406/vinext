@@ -606,6 +606,55 @@ describe("seedMemoryCacheFromPrerender", () => {
     expect(await getCacheHandler().get(rscKey)).toBeNull();
   });
 
+  it("seeds a rewritten source URL under its runtime cache pathname with the tags of its page", async () => {
+    const buildId = "rewrite-source-test";
+    const cachePathname = "/about?__vinext_rewrite=%2Fen%2Fabout";
+    const page = {
+      route: "/:locale/about",
+      path: "/en/about",
+      status: "rendered",
+      revalidate: 60,
+      router: "app",
+    };
+    setupPrerenderFixture(
+      serverDir,
+      {
+        buildId,
+        routes: [page, { ...page, rewrite: { source: "/about", cachePathname } }],
+      },
+      {
+        "en/about.html": "<html>destination</html>",
+        "en/about.rsc": "destination flight",
+        "__vinext/rewrite-sources/about.html": "<html>source</html>",
+        "__vinext/rewrite-sources/about.rsc": "source flight",
+      },
+    );
+
+    await seedMemoryCacheFromPrerender(serverDir);
+
+    const sourceHtmlKey = appIsrCacheKey(cachePathname, "html", buildId);
+    const sourceRscKey = appIsrCacheKey(cachePathname, "rsc", buildId);
+    expect((await getCacheHandler().get(sourceHtmlKey))?.value).toMatchObject({
+      kind: "APP_PAGE",
+      html: "<html>source</html>",
+    });
+    expect(await getCacheHandler().get(sourceRscKey)).not.toBeNull();
+    expect(
+      (await getCacheHandler().get(appIsrCacheKey("/en/about", "html", buildId)))?.value,
+    ).toMatchObject({ kind: "APP_PAGE", html: "<html>destination</html>" });
+
+    // The source URL is not a concrete path of the route.
+    expect([...(getRenderedConcreteUrlPathsForRoute("/:locale/about") ?? [])]).toEqual([
+      "/en/about",
+    ]);
+
+    // The runtime tags a rewritten render by the page it resolved to, so
+    // revalidating that page must purge the seeded source entry too.
+    await Promise.resolve(revalidatePath("/en/about"));
+    expect(await getCacheHandler().get(sourceHtmlKey)).toBeNull();
+    expect(await getCacheHandler().get(sourceRscKey)).toBeNull();
+  });
+
   it("user cache tags from the prerender manifest invalidate seeded entries", async () => {
     const buildId = "revalidate-seeded-user-tag-test";
     setupPrerenderFixture(

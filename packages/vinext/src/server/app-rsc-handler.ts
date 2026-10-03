@@ -127,6 +127,10 @@ import {
   resolvePublicFileRoute,
 } from "./request-pipeline.js";
 import {
+  appRewriteCachePathname,
+  applyPrerenderCacheIdentityHeader,
+} from "./app-rewrite-cache-identity.js";
+import {
   matchPrerenderRouteParamsPayload,
   readTrustedPrerenderRouteParams,
   serializePrerenderRouteParamsHeader,
@@ -239,10 +243,6 @@ function haveSamePageParams(first: AppPageParams, second: AppPageParams): boolea
     }
   }
   return true;
-}
-
-function rewriteCachePathname(sourcePathname: string, resolvedPathname: string): string {
-  return `${sourcePathname}?__vinext_rewrite=${encodeURIComponent(resolvedPathname)}`;
 }
 
 function requestOptsOutOfWorkerResponseStage(
@@ -2314,13 +2314,9 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
       setInterceptionResponseUncacheable(true);
     }
   }
-  // Next.js keys App ISR by the resolved pathname:
-  // packages/next/src/build/templates/app-route.ts
-  // Keep that resolved identity while also partitioning by the public source
-  // pathname that user code observes through usePathname().
   const cachePathname = cleanPathnameIsRequestPathname
     ? cleanPathname
-    : rewriteCachePathname(canonicalPathname, cleanPathname);
+    : appRewriteCachePathname(canonicalPathname, cleanPathname);
   setFrameworkRequestRoute(patternToNextFormat(route.pattern), isRscRequest);
   // Hydrate lazy page/route-handler modules before the page-vs-handler dispatch
   // branch and any downstream synchronous module reads.
@@ -2521,6 +2517,23 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   // Issue: https://github.com/cloudflare/vinext/issues/1483
   if (isProgressiveActionRender) {
     return applyProgressiveActionSideEffects(pageResponse, progressiveActionFormState);
+  }
+  // The build cannot tell from a URL how this handler resolves it. Confirm the
+  // cache pathname of a rewritten page render, so the prerender seeds it only
+  // under the key that runtime requests for the same source URL read.
+  if (
+    !cleanPathnameIsRequestPathname &&
+    !bypassInterceptionContextCache &&
+    pageResponse.ok &&
+    typeof process !== "undefined" &&
+    process.env?.VINEXT_PRERENDER === "1"
+  ) {
+    try {
+      applyPrerenderCacheIdentityHeader(pageResponse.headers, cachePathname);
+    } catch {
+      // Immutable headers: the response is not a page render that the build can
+      // seed. Without the confirmation the build leaves this URL to runtime.
+    }
   }
   return pageResponse;
 }

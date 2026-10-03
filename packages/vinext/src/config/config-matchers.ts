@@ -30,6 +30,7 @@ import {
 import { analyzeRegexSafety } from "../utils/regex-safety.js";
 import { requestContextFromRequest, type RequestContext } from "./request-context.js";
 import { isExternalUrl } from "../utils/external-url.js";
+import { escapeRegExp } from "../utils/regex.js";
 
 export {
   normalizeHost,
@@ -1020,6 +1021,129 @@ export function matchesRewriteSource(
     shouldEvaluateRule(rewrite.basePath, basePathState) &&
     matchConfigPattern(pathname, rewrite.source) !== null
   );
+}
+
+type InvertibleSourceToken =
+  | { kind: "literal"; value: string }
+  | { kind: "param"; name: string; capture: string };
+
+/**
+ * Split a rewrite source into literal text and named params, each with the
+ * regex that its value must match. Returns null when the source has syntax
+ * that a param value cannot fill back in: an unnamed group, an optional
+ * marker, or an escape.
+ */
+function tokenizeInvertibleSource(source: string): InvertibleSourceToken[] | null {
+  const tokens: InvertibleSourceToken[] = [];
+  const tokenRe = /:([\w-]+)|[^:]+/g;
+  let expectedIndex = 0;
+  let tok: RegExpExecArray | null;
+  while ((tok = tokenRe.exec(source)) !== null) {
+    // A global regex skips text that no alternative matches (a bare `:`).
+    if (tok.index !== expectedIndex) return null;
+    if (tok[1] === undefined) {
+      if (/[()\\?*+]/.test(tok[0])) return null;
+      tokens.push({ kind: "literal", value: tok[0] });
+    } else {
+      // Same order as matchConfigPattern: the quantifier comes before the constraint.
+      const quantifier = source[tokenRe.lastIndex];
+      const repeats = quantifier === "*" || quantifier === "+";
+      if (repeats) tokenRe.lastIndex += 1;
+      const constraint = extractConstraint(source, tokenRe);
+      tokens.push({
+        kind: "param",
+        name: tok[1],
+        capture: constraint ?? (repeats ? (quantifier === "*" ? ".*" : ".+") : "[^/]+"),
+      });
+    }
+    expectedIndex = tokenRe.lastIndex;
+  }
+  return expectedIndex === source.length ? tokens : null;
+}
+
+/**
+ * Invert a rewrite rule: return the source pathname that the rule rewrites to
+ * `destinationPathname`, or null when there is none or the rule cannot be
+ * inverted.
+ *
+ * Only rules whose result does not depend on the request are inverted: no
+ * `has` / `missing`, an internal destination with no query or hash, and every
+ * source param present one time in the destination. The result is checked
+ * against the forward match, so a returned pathname always rewrites to
+ * `destinationPathname` through this rule. It does not tell whether an earlier
+ * rule, a redirect, or a filesystem route takes the pathname first; only the
+ * request handler can tell that.
+ */
+export function rewriteSourceForDestination(
+  rewrite: NextRewrite,
+  destinationPathname: string,
+): string | null {
+  if (rewrite.has?.length || rewrite.missing?.length) return null;
+  const { destination } = rewrite;
+  if (!destination.startsWith("/") || isExternalUrl(destination) || /[?#]/.test(destination)) {
+    return null;
+  }
+
+  const tokens = tokenizeInvertibleSource(rewrite.source);
+  if (!tokens) return null;
+  const captures = new Map<string, string>();
+  for (const token of tokens) {
+    if (token.kind !== "param") continue;
+    if (captures.has(token.name)) return null;
+    captures.set(token.name, token.capture);
+  }
+
+  const values = new Map<string, string>();
+  if (captures.size === 0) {
+    if (destination !== destinationPathname) return null;
+  } else {
+    // Match the destination with each param slot held to its source constraint.
+    // A plain `[^/]+` slot would reject the multi-segment value of `:path(.*)`.
+    const paramAlternation = [...captures.keys()]
+      .sort((a, b) => b.length - a.length)
+      .map(escapeRegExp)
+      .join("|");
+    const paramRe = new RegExp(`:(${paramAlternation})([+*])?(?![A-Za-z0-9_])`, "g");
+    const groups = new Map<string, string>();
+    let destinationRegex = "";
+    let lastIndex = 0;
+    for (const match of destination.matchAll(paramRe)) {
+      const name = match[1];
+      if (groups.has(name)) return null;
+      const group = `vinextSource${groups.size}`;
+      groups.set(name, group);
+      destinationRegex += `${escapeRegExp(destination.slice(lastIndex, match.index))}(?<${group}>${captures.get(name)})`;
+      lastIndex = match.index + match[0].length;
+    }
+    if (groups.size !== captures.size) return null;
+    destinationRegex = `^${destinationRegex}${escapeRegExp(destination.slice(lastIndex))}$`;
+    // The source matcher already warned about an unsafe constraint.
+    if (!isSafeRegex(destinationRegex)) return null;
+    let matched: RegExpExecArray | null;
+    try {
+      matched = new RegExp(destinationRegex).exec(destinationPathname);
+    } catch {
+      return null;
+    }
+    if (!matched?.groups) return null;
+    for (const [name, group] of groups) values.set(name, matched.groups[group] ?? "");
+  }
+
+  const source = stripTrailingSlashForConfigMatch(
+    tokens
+      .map((token) => (token.kind === "literal" ? token.value : (values.get(token.name) ?? "")))
+      .join(""),
+  );
+  if (!source.startsWith("/")) return null;
+
+  const params = matchConfigPattern(source, rewrite.source);
+  if (
+    !params ||
+    substituteAndSanitizeRewriteDestination(destination, params) !== destinationPathname
+  ) {
+    return null;
+  }
+  return source;
 }
 
 /**
