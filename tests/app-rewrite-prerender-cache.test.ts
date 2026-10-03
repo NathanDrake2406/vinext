@@ -78,6 +78,8 @@ describe.each([
         // A request without the cookie, such as the build request, takes the first rule.
         { source: "/promo", missing: [{ type: "cookie", key: "seen" }], destination: "/en/about" },
         { source: "/promo", destination: "/en/contact" },
+        // An empty catch-all rewrites "/shop" to "/en/shop/", with a trailing slash.
+        { source: "/shop/:path*", destination: "/en/shop/:path*" },
         {
           source: "/:path((?!en$|en/|es$|es/|api$|api/|_next/).*)",
           destination: "/en/:path",
@@ -113,6 +115,23 @@ export function Pathname() {
       // Only the Flight test requests this source URL: a document request that
       // misses writes the Flight entry too, which would hide a missing seed.
       write(root, "app/[locale]/contact/page.tsx", LOCALE_PAGE("contact", 2));
+      write(root, "app/[locale]/shop/page.tsx", LOCALE_PAGE("shop", 2));
+      write(
+        root,
+        "app/[locale]/blog/[slug]/page.tsx",
+        `export function generateStaticParams() {
+  return [
+    { locale: "en", slug: "café" },
+    { locale: "en", slug: "with space" },
+  ];
+}
+
+export default async function Page({ params }: { params: Promise<{ slug: string }> }) {
+  const { slug } = await params;
+  return <main><p>{\`page:blog:\${slug}\`}</p></main>;
+}
+`,
+      );
 
       const builder = await createBuilder({
         root,
@@ -153,6 +172,8 @@ export function Pathname() {
       ["/about", "page:about:en"],
       // The source parameter captures more than one path segment.
       ["/docs/intro", "page:docs/intro:en"],
+      // The rewritten pathname has a trailing slash that the page URL does not have.
+      ["/shop", "page:shop:en"],
     ])("serves the rewritten source URL %s as a cache hit", async (sourcePath, marker) => {
       const response = await fetch(url(sourcePath));
       expect(response.status).toBe(200);
@@ -164,6 +185,18 @@ export function Pathname() {
       expect(html).toContain(`pathname:${sourcePath}`);
       expect(html).not.toContain("pathname:/en");
     });
+
+    // The request handler keeps the percent-encoding of the request in the
+    // resolved part of the cache pathname.
+    it.each(["/blog/caf%C3%A9", "/blog/with%20space"])(
+      "serves the percent-encoded source URL %s as a cache hit",
+      async (sourcePath) => {
+        const response = await fetch(url(sourcePath));
+        expect(response.status).toBe(200);
+        expect(response.headers.get("x-vinext-cache")).toBe("HIT");
+        expect(await response.text()).toContain("page:blog:");
+      },
+    );
 
     it("serves the rewritten source URL Flight payload as a cache hit", async () => {
       const response = await fetch(url("/contact"), {
@@ -194,3 +227,64 @@ export function Pathname() {
     });
   },
 );
+
+describe("static export with next.config rewrites", () => {
+  it("does not write rewrite source artifacts into the public export directory", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-rewrite-export-"));
+    try {
+      write(root, "package.json", JSON.stringify({ name: "rewrite-export", type: "module" }));
+      fs.symlinkSync(
+        path.resolve(import.meta.dirname, "../node_modules"),
+        path.join(root, "node_modules"),
+        "junction",
+      );
+      write(
+        root,
+        "next.config.mjs",
+        `export default {
+  output: "export",
+  async rewrites() {
+    return { afterFiles: [{ source: "/about", destination: "/en/about" }] };
+  },
+};
+`,
+      );
+      write(
+        root,
+        "app/layout.tsx",
+        `export default function Layout({ children }: { children: React.ReactNode }) {
+  return <html><body>{children}</body></html>;
+}
+`,
+      );
+      write(
+        root,
+        "app/[locale]/about/page.tsx",
+        `export function generateStaticParams() {
+  return [{ locale: "en" }];
+}
+
+export default function Page() {
+  return <main>about</main>;
+}
+`,
+      );
+
+      const builder = await createBuilder({
+        root,
+        configFile: false,
+        plugins: [vinext({ appDir: root })],
+        logLevel: "silent",
+      });
+      await builder.buildApp();
+      const result = await runPrerender({ root });
+
+      const exportDir = path.join(root, "dist/client");
+      expect(fs.existsSync(path.join(exportDir, "en/about.html"))).toBe(true);
+      expect(fs.existsSync(path.join(exportDir, "__vinext"))).toBe(false);
+      expect(result?.routes.filter((route) => "rewrite" in route)).toEqual([]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }, 180_000);
+});

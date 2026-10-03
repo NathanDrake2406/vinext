@@ -14,6 +14,7 @@ import {
   MIDDLEWARE_SET_COOKIE_HEADER,
   MIDDLEWARE_SKIP_HEADER,
   VINEXT_MW_CTX_HEADER,
+  VINEXT_PRERENDER_CACHE_IDENTITY_HEADER,
   VINEXT_PRERENDER_ROUTE_PARAMS_HEADER,
   VINEXT_PRERENDER_SPECULATIVE_HEADER,
   VINEXT_REVALIDATE_HOST_HEADER,
@@ -61,6 +62,7 @@ export const VINEXT_CACHEABILITY_PROBE_QUERY_PARAM = "__vinext_cacheability_prob
 
 export {
   VINEXT_MW_CTX_HEADER,
+  VINEXT_PRERENDER_CACHE_IDENTITY_HEADER,
   VINEXT_PRERENDER_ROUTE_PARAMS_HEADER,
   VINEXT_PRERENDER_SECRET_HEADER,
   VINEXT_PRERENDER_SPECULATIVE_HEADER,
@@ -108,9 +110,6 @@ export const VINEXT_PRERENDER_CACHE_LIFE_HEADER = "x-vinext-prerender-cache-life
 
 /** Prerender-only Pages marker: "0" confirms the page render used the requested URL. */
 export const VINEXT_PRERENDER_REWRITTEN_HEADER = "x-vinext-prerender-rewritten";
-
-/** Prerender-only App side channel: the cache identity of a render reached through a rewrite. */
-export const VINEXT_PRERENDER_CACHE_IDENTITY_HEADER = "x-vinext-prerender-cache-identity";
 
 /** Marks a local prerender-server 500 that originated from a thrown render error. */
 export const VINEXT_PRERENDER_RENDER_ERROR_HEADER = "x-vinext-prerender-render-error";

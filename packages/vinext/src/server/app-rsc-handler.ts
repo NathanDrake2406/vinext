@@ -2521,19 +2521,15 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   // The build cannot tell from a URL how this handler resolves it. Confirm the
   // cache pathname of a rewritten page render, so the prerender seeds it only
   // under the key that runtime requests for the same source URL read.
+  // A redirect response can have immutable headers, and the build seeds only a
+  // successful render.
   if (
     !cleanPathnameIsRequestPathname &&
-    !bypassInterceptionContextCache &&
     pageResponse.ok &&
     typeof process !== "undefined" &&
     process.env?.VINEXT_PRERENDER === "1"
   ) {
-    try {
-      applyPrerenderCacheIdentityHeader(pageResponse.headers, cachePathname);
-    } catch {
-      // Immutable headers: the response is not a page render that the build can
-      // seed. Without the confirmation the build leaves this URL to runtime.
-    }
+    applyPrerenderCacheIdentityHeader(pageResponse.headers, cachePathname);
   }
   return pageResponse;
 }

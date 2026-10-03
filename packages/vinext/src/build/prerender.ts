@@ -23,11 +23,10 @@ import type { Server as HttpServer } from "node:http";
 import type { Route } from "../routing/pages-router.js";
 import { appRouteLayoutStaticParamsGroups, type AppRoute } from "../routing/app-router.js";
 import type { ResolvedNextConfig } from "../config/next-config.js";
-import { rewriteSourceForDestination } from "../config/config-matchers.js";
 import { buildPregeneratedConcretePathTable } from "../server/prerender-manifest.js";
 import { normalizePregeneratedPathname } from "../server/pregenerated-concrete-paths.js";
 import {
-  appRewriteCachePathname,
+  parseAppRewriteCachePathname,
   readPrerenderCacheIdentityHeader,
 } from "../server/app-rewrite-cache-identity.js";
 import { BLOCKED_PAGES } from "vinext/shims/constants";
@@ -85,6 +84,7 @@ import {
   markAppPprDynamicFallbackShellHtml,
 } from "../server/app-ppr-fallback-shell.js";
 import { enterPrerenderPhase } from "./prerender-phase.js";
+import { collectRewriteSourcePathnames } from "./prerender-rewrite-sources.js";
 import { buildAppRouteCacheValue } from "../server/app-route-handler-response.js";
 export { readPrerenderSecret } from "./server-manifest.js";
 
@@ -1825,34 +1825,18 @@ export async function prerenderApp({
     // The runtime keys a rewritten request by its source URL too, because the
     // page observes that URL through usePathname(). The artifact of `urlPath`
     // therefore never serves the source URL: render the source URL itself so
-    // that its own entry exists. A static export has no rewrites.
+    // that its own entry exists. A static export has no server to rewrite a
+    // request, and its output directory is public.
     if (mode !== "export") {
-      const nonDynamicRoutePatterns = new Set(
-        routes.filter((route) => !route.isDynamic).map((route) => route.pattern),
-      );
-      const rewritePhases = [
-        { rewrites: config.rewrites.beforeFiles, runsAfterFilesystem: false },
-        { rewrites: config.rewrites.afterFiles, runsAfterFilesystem: true },
-        { rewrites: config.rewrites.fallback, runsAfterFilesystem: true },
-      ];
-      const queuedRewriteSources = new Set<string>();
       const rewriteSourceUrls: UrlToRender[] = [];
       for (const page of urlsToRender) {
+        // A fallback shell has a placeholder path that no visitor requests.
         if (page.isFallback) continue;
-        for (const { rewrites, runsAfterFilesystem } of rewritePhases) {
-          for (const rewrite of rewrites) {
-            // Such a source is not relative to basePath, which renderUrl adds.
-            if (rewrite.basePath === false) continue;
-            const sourcePath = rewriteSourceForDestination(rewrite, page.urlPath);
-            if (sourcePath === null || sourcePath === page.urlPath) continue;
-            // This filter only saves a render. The request handler decides
-            // how the source URL resolves, and renderUrl checks its answer.
-            if (runsAfterFilesystem && nonDynamicRoutePatterns.has(sourcePath)) continue;
-            const queueKey = `${sourcePath}\0${page.urlPath}`;
-            if (queuedRewriteSources.has(queueKey)) continue;
-            queuedRewriteSources.add(queueKey);
-            rewriteSourceUrls.push({ ...page, rewriteSourcePath: sourcePath });
-          }
+        for (const rewriteSourcePath of collectRewriteSourcePathnames(
+          page.urlPath,
+          config.rewrites,
+        )) {
+          rewriteSourceUrls.push({ ...page, rewriteSourcePath });
         }
       }
       urlsToRender.push(...rewriteSourceUrls);
@@ -2099,20 +2083,18 @@ export async function prerenderApp({
         }
 
         // Only the request handler knows how the source URL resolved. Keep the
-        // render only when the handler confirms that it rewrote the source URL
+        // render only when the handler confirms that it rewrote this request
         // to this page: a route that owns the URL, middleware, or an earlier
-        // rule gives another cache pathname. The key comes from the build's
-        // own expectation, never from the response, because a proxied
-        // upstream response can carry any header.
+        // rule gives another identity or none.
         let rewrite: { source: string; cachePathname: string } | undefined;
         if (rewriteSourcePath !== undefined) {
-          const cachePathname = appRewriteCachePathname(
-            // The handler keys by the pathname it receives, which keeps the
-            // slash that `trailingSlash` adds to the request.
-            normalizePregeneratedPathname(routeRequestPath),
-            normalizePregeneratedPathname(urlPath),
-          );
-          if (htmlRender.cachePathname !== cachePathname) return null;
+          const cachePathname = htmlRender.cachePathname;
+          if (
+            cachePathname === null ||
+            !isRewriteCachePathnameOf(cachePathname, routeRequestPath, urlPath)
+          ) {
+            return null;
+          }
           rewrite = { source: rewriteSourcePath, cachePathname };
         }
         // A source URL can be equal to the URL of another prerendered route.
@@ -2330,6 +2312,35 @@ export async function prerenderApp({
       restorePrerenderPhase();
     }
   }
+}
+
+/** A trailing slash does not change which page a pathname names. */
+function pageIdentityPathname(pathname: string): string {
+  const normalized = normalizePregeneratedPathname(pathname);
+  return normalized.length > 1 && normalized.endsWith("/") ? normalized.slice(0, -1) : normalized;
+}
+
+/**
+ * Whether `cachePathname` is the identity that the request handler gives a
+ * request for `requestPathname` that a rewrite resolved to the page at
+ * `pagePathname`.
+ *
+ * The handler keeps the percent-encoding of the request and the trailing slash
+ * of the rewrite destination in the resolved part. The parts are therefore
+ * compared in normalized form, and the build stores the handler's own
+ * spelling: that spelling is the key that a runtime request reads.
+ */
+function isRewriteCachePathnameOf(
+  cachePathname: string,
+  requestPathname: string,
+  pagePathname: string,
+): boolean {
+  const identity = parseAppRewriteCachePathname(cachePathname);
+  return (
+    identity !== null &&
+    identity.sourcePathname === normalizePregeneratedPathname(requestPathname) &&
+    pageIdentityPathname(identity.resolvedPathname) === pageIdentityPathname(pagePathname)
+  );
 }
 
 /** Cache life recovered from a prerendered response; `stale` seeds the ISR entry. */

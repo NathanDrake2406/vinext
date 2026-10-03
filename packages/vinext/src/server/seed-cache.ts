@@ -126,7 +126,13 @@ export async function seedMemoryCacheFromPrerender(
     }
   }
 
-  const appRoutes = getRenderedAppRoutes(routes);
+  const renderedAppRoutes = getRenderedAppRoutes(routes);
+  // A bounded cache evicts its oldest entries. Seed the entries of rewritten
+  // source URLs first, so that they cannot push out the entry of a page URL.
+  const appRoutes = [
+    ...renderedAppRoutes.filter((route) => route.rewrite),
+    ...renderedAppRoutes.filter((route) => !route.rewrite),
+  ];
 
   for (const route of appRoutes) {
     const concretePathname = route.path ?? route.route;
@@ -138,7 +144,7 @@ export async function seedMemoryCacheFromPrerender(
     // The runtime builds tags from the pathname the request resolved to, and
     // keys from its cache pathname. The two differ for a rewritten source URL.
     const resolvedPathname = normalizePregeneratedPathname(concretePathname);
-    const cachePathname = route.rewrite?.cachePathname ?? resolvedPathname;
+    const cachePathname = route.rewrite ? route.rewrite.cachePathname : resolvedPathname;
     // Fallback keys support older generated entries that do not export their
     // runtime key builders. Current App Router entries inject buildAppPage*Key
     // so seeded keys match process.env.__VINEXT_BUILD_ID exactly.

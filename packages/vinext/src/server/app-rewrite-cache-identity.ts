@@ -1,5 +1,7 @@
 import { VINEXT_PRERENDER_CACHE_IDENTITY_HEADER } from "./headers.js";
 
+const REWRITE_MARKER = "?__vinext_rewrite=";
+
 /**
  * Cache pathname of an App request that a rewrite resolved to another page.
  *
@@ -9,10 +11,28 @@ import { VINEXT_PRERENDER_CACHE_IDENTITY_HEADER } from "./headers.js";
  * pathname that user code observes through usePathname().
  *
  * The request handler and the prerender must agree on this value, or a seeded
- * entry is never read. This is its only definition.
+ * entry is never read. This module is the only owner of its format.
  */
 export function appRewriteCachePathname(sourcePathname: string, resolvedPathname: string): string {
-  return `${sourcePathname}?__vinext_rewrite=${encodeURIComponent(resolvedPathname)}`;
+  return `${sourcePathname}${REWRITE_MARKER}${encodeURIComponent(resolvedPathname)}`;
+}
+
+/** The parts of a rewritten cache pathname, or null for the pathname of an unrewritten request. */
+export function parseAppRewriteCachePathname(
+  cachePathname: string,
+): { sourcePathname: string; resolvedPathname: string } | null {
+  const markerIndex = cachePathname.indexOf(REWRITE_MARKER);
+  if (markerIndex === -1) return null;
+  try {
+    return {
+      sourcePathname: cachePathname.slice(0, markerIndex),
+      resolvedPathname: decodeURIComponent(
+        cachePathname.slice(markerIndex + REWRITE_MARKER.length),
+      ),
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**

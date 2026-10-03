@@ -104,7 +104,7 @@ export function finalizeStaticAssetsPrerenderOutput(
     if (route.router === "app") {
       // A rewritten source URL has its own artifact files and its own key.
       const artifactPathname = getAppPageArtifactPathname(route);
-      const appCachePathname = route.rewrite?.cachePathname ?? cachePathname;
+      const appCachePathname = route.rewrite ? route.rewrite.cachePathname : cachePathname;
       count += Number(
         writeCacheAsset(
           outputDir,

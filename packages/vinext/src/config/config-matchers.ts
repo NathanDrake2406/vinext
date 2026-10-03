@@ -19,6 +19,7 @@ import {
   PRERENDER_REVALIDATE_HEADER,
   PRERENDER_REVALIDATE_ONLY_GENERATED_HEADER,
   VINEXT_MW_CTX_HEADER,
+  VINEXT_PRERENDER_CACHE_IDENTITY_HEADER,
   VINEXT_PRERENDER_ROUTE_PARAMS_HEADER,
   VINEXT_PRERENDER_SECRET_HEADER,
   VINEXT_REVALIDATE_HOST_HEADER,
@@ -1067,12 +1068,17 @@ function tokenizeInvertibleSource(source: string): InvertibleSourceToken[] | nul
  * inverted.
  *
  * Only rules whose result does not depend on the request are inverted: no
- * `has` / `missing`, an internal destination with no query or hash, and every
- * source param present one time in the destination. The result is checked
- * against the forward match, so a returned pathname always rewrites to
- * `destinationPathname` through this rule. It does not tell whether an earlier
- * rule, a redirect, or a filesystem route takes the pathname first; only the
- * request handler can tell that.
+ * `has` / `missing`, and every source param present one time in the
+ * destination. A destination that is external, or that has a query or a hash,
+ * is never equal to a pathname, so such a rule gives null.
+ *
+ * A trailing slash does not change which page a destination names, so the
+ * comparison ignores it: `/:path*` to `/en/:path*` maps `/` to `/en/`.
+ *
+ * The result is checked against the forward match, so a returned pathname
+ * always rewrites to `destinationPathname` through this rule. It does not tell
+ * whether an earlier rule, a redirect, or a filesystem route takes the pathname
+ * first; only the request handler can tell that.
  */
 export function rewriteSourceForDestination(
   rewrite: NextRewrite,
@@ -1080,9 +1086,7 @@ export function rewriteSourceForDestination(
 ): string | null {
   if (rewrite.has?.length || rewrite.missing?.length) return null;
   const { destination } = rewrite;
-  if (!destination.startsWith("/") || isExternalUrl(destination) || /[?#]/.test(destination)) {
-    return null;
-  }
+  const target = stripTrailingSlashForConfigMatch(destinationPathname);
 
   const tokens = tokenizeInvertibleSource(rewrite.source);
   if (!tokens) return null;
@@ -1095,7 +1099,7 @@ export function rewriteSourceForDestination(
 
   const values = new Map<string, string>();
   if (captures.size === 0) {
-    if (destination !== destinationPathname) return null;
+    if (stripTrailingSlashForConfigMatch(destination) !== target) return null;
   } else {
     // Match the destination with each param slot held to its source constraint.
     // A plain `[^/]+` slot would reject the multi-segment value of `:path(.*)`.
@@ -1117,11 +1121,12 @@ export function rewriteSourceForDestination(
     }
     if (groups.size !== captures.size) return null;
     destinationRegex = `^${destinationRegex}${escapeRegExp(destination.slice(lastIndex))}$`;
-    // The source matcher already warned about an unsafe constraint.
+    // An unsafe constraint must not run. The source matcher warns about it.
     if (!isSafeRegex(destinationRegex)) return null;
     let matched: RegExpExecArray | null;
     try {
-      matched = new RegExp(destinationRegex).exec(destinationPathname);
+      const compiled = new RegExp(destinationRegex);
+      matched = compiled.exec(target) ?? compiled.exec(`${target}/`);
     } catch {
       return null;
     }
@@ -1134,12 +1139,13 @@ export function rewriteSourceForDestination(
       .map((token) => (token.kind === "literal" ? token.value : (values.get(token.name) ?? "")))
       .join(""),
   );
-  if (!source.startsWith("/")) return null;
 
   const params = matchConfigPattern(source, rewrite.source);
   if (
     !params ||
-    substituteAndSanitizeRewriteDestination(destination, params) !== destinationPathname
+    stripTrailingSlashForConfigMatch(
+      substituteAndSanitizeRewriteDestination(destination, params),
+    ) !== target
   ) {
     return null;
   }
@@ -1490,6 +1496,9 @@ export async function proxyExternalRequest(
   upstreamResponse.headers.forEach((value, key) => {
     const lower = key.toLowerCase();
     if (HOP_BY_HOP_HEADERS.has(lower)) return;
+    // Only this server's request handler can confirm a prerender cache
+    // identity. An upstream origin must not answer for it.
+    if (lower === VINEXT_PRERENDER_CACHE_IDENTITY_HEADER) return;
     if (isNodeRuntime && (lower === "content-encoding" || lower === "content-length")) return;
     responseHeaders.append(key, value);
   });

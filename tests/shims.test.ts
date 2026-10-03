@@ -14281,6 +14281,34 @@ describe("proxyExternalRequest", () => {
     }
   });
 
+  it("does not let an upstream origin confirm a prerender cache identity", async () => {
+    const { proxyExternalRequest } =
+      await import("../packages/vinext/src/config/config-matchers.js");
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () =>
+      new Response("proxied body", {
+        headers: {
+          "x-upstream": "true",
+          // The build takes this header as the request handler's own answer.
+          "x-vinext-prerender-cache-identity": encodeURIComponent(
+            "/about?__vinext_rewrite=%2Fen%2Fabout",
+          ),
+        },
+      });
+
+    try {
+      const response = await proxyExternalRequest(
+        new Request("http://localhost:3000/about"),
+        "https://upstream.example/landing",
+      );
+      expect(response.headers.get("x-upstream")).toBe("true");
+      expect(response.headers.has("x-vinext-prerender-cache-identity")).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("preserves query parameters from the rewrite destination", async () => {
     const { proxyExternalRequest } =
       await import("../packages/vinext/src/config/config-matchers.js");
