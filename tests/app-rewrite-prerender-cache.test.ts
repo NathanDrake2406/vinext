@@ -100,6 +100,24 @@ async function startServer(root: string): Promise<{ server: Server; baseUrl: str
   };
 }
 
+/**
+ * A file that fixture code appends to when it runs. The prerender must not run
+ * code that it did not run before this change, such as a route handler.
+ */
+function createCallLog(): { read: () => string; remove: () => void } {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-rewrite-call-log-"));
+  const file = path.join(directory, "calls.log");
+  fs.writeFileSync(file, "");
+  process.env.VINEXT_TEST_CALL_LOG = file;
+  return {
+    read: () => fs.readFileSync(file, "utf8"),
+    remove: () => {
+      delete process.env.VINEXT_TEST_CALL_LOG;
+      fs.rmSync(directory, { recursive: true, force: true });
+    },
+  };
+}
+
 async function stop(server: Server | undefined, root: string): Promise<void> {
   await new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve()));
   if (root) fs.rmSync(root, { recursive: true, force: true });
@@ -126,7 +144,8 @@ describe.each([
     let routes: ManifestRoute[] = [];
     let server: Server | undefined;
     let baseUrl = "";
-    let routeHandlerCallsDuringBuild = "";
+    let callLog: ReturnType<typeof createCallLog> | undefined;
+    let callsDuringBuild = "";
 
     const url = (pathname: string) => {
       if (pathname === "/") return `${baseUrl}${basePath}${trailingSlash || !basePath ? "/" : ""}`;
@@ -134,12 +153,7 @@ describe.each([
     };
 
     beforeAll(async () => {
-      const routeHandlerLog = path.join(
-        fs.mkdtempSync(path.join(os.tmpdir(), "vinext-rewrite-route-handler-")),
-        "calls.log",
-      );
-      fs.writeFileSync(routeHandlerLog, "");
-      process.env.VINEXT_TEST_ROUTE_HANDLER_LOG = routeHandlerLog;
+      callLog = createCallLog();
       ({ root, routes } = await buildFixture(
         `export default {
   basePath: ${JSON.stringify(basePath)},
@@ -178,7 +192,7 @@ describe.each([
           "app/hook/route.ts": `import fs from "node:fs";
 
 export function GET() {
-  fs.appendFileSync(process.env.VINEXT_TEST_ROUTE_HANDLER_LOG, "GET /hook\\n");
+  fs.appendFileSync(process.env.VINEXT_TEST_CALL_LOG, "GET /hook\\n");
   return new Response("hook route handler");
 }
 `,
@@ -205,19 +219,17 @@ export default async function Page({ params }: { params: Promise<{ slug: string 
 `,
         },
       ));
-      routeHandlerCallsDuringBuild = fs.readFileSync(routeHandlerLog, "utf8");
+      callsDuringBuild = callLog.read();
       ({ server, baseUrl } = await startServer(root));
     }, 180_000);
 
     afterAll(async () => {
       await stop(server, root);
-      const routeHandlerLog = process.env.VINEXT_TEST_ROUTE_HANDLER_LOG;
-      delete process.env.VINEXT_TEST_ROUTE_HANDLER_LOG;
-      if (routeHandlerLog) fs.rmSync(path.dirname(routeHandlerLog), { recursive: true });
+      callLog?.remove();
     });
 
     it("does not run a route handler that owns a rewrite source URL during the build", async () => {
-      expect(routeHandlerCallsDuringBuild).toBe("");
+      expect(callsDuringBuild).toBe("");
 
       const response = await fetch(url("/hook"));
       expect(response.status).toBe(200);
@@ -387,6 +399,60 @@ describe("next.config rewrite sources that differ only by letter case", () => {
     const rendered = await fetch(`${baseUrl}/about`);
     expect(rendered.headers.get("x-vinext-cache")).toBe("MISS");
     expect(await rendered.text()).toContain("pathname:/about");
+  });
+});
+
+describe("a Pages Router route that owns a rewrite source URL in a hybrid build", () => {
+  let root = "";
+  let server: Server | undefined;
+  let baseUrl = "";
+  let callLog: ReturnType<typeof createCallLog> | undefined;
+  let callsDuringBuild = "";
+
+  beforeAll(async () => {
+    callLog = createCallLog();
+    ({ root } = await buildFixture(
+      `export default {
+  async rewrites() {
+    return {
+      afterFiles: [${UNPREFIXED_DEFAULT_LOCALE_RULES}
+      ],
+    };
+  },
+};
+`,
+      {
+        "app/[locale]/feed/page.tsx": LOCALE_PAGE("feed", 2),
+        "pages/feed.tsx": `import fs from "node:fs";
+
+export function getServerSideProps() {
+  fs.appendFileSync(process.env.VINEXT_TEST_CALL_LOG, "getServerSideProps /feed\\n");
+  return { props: {} };
+}
+
+export default function Feed() {
+  return <p>pages feed</p>;
+}
+`,
+      },
+    ));
+    callsDuringBuild = callLog.read();
+    ({ server, baseUrl } = await startServer(root));
+  }, 180_000);
+
+  afterAll(async () => {
+    await stop(server, root);
+    callLog?.remove();
+  });
+
+  it("does not run during the build", async () => {
+    // `/feed` is a rewrite source of `/en/feed` by its pattern. The prerender
+    // does not render a page that has getServerSideProps.
+    expect(callsDuringBuild).toBe("");
+
+    const response = await fetch(`${baseUrl}/feed`);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("pages feed");
   });
 });
 

@@ -295,6 +295,12 @@ type PrerenderPagesOptions = {
 type PrerenderAppOptions = {
   /** Discovered app routes. */
   routes: AppRoute[];
+  /**
+   * Pages Router page and API routes of a hybrid build. The prerender does not
+   * request a rewrite source URL that one of these routes owns, because the
+   * request would run that route.
+   */
+  pagesRoutes?: readonly Pick<Route, "pattern" | "isDynamic">[];
   /** Discovered file-based metadata routes. Used by static export. */
   metadataRoutes?: readonly MetadataFileRoute[];
   /**
@@ -1832,7 +1838,8 @@ export async function prerenderApp({
     if (mode !== "export") {
       // A fallback shell has a placeholder path that no visitor requests.
       const pages = urlsToRender.filter((page) => !page.isFallback);
-      for (const { page, sourcePathname } of collectRewriteSources(pages, config, routes)) {
+      const routeOwners = [...routes, ...(options.pagesRoutes ?? [])];
+      for (const { page, sourcePathname } of collectRewriteSources(pages, config, routeOwners)) {
         urlsToRender.push({ ...page, rewriteSourcePath: sourcePathname });
       }
     }
