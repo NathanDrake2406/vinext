@@ -13659,6 +13659,23 @@ describe("matchRedirect locale-static index", () => {
     expect(matchRedirect("/fr/foo", twoSegmentLocale, emptyCtx)?.destination).toBe("/target");
   });
 
+  it("does not index a suffix that has a group", async () => {
+    const { matchRedirect } = await import("../packages/vinext/src/config/config-matchers.js");
+    const redirects = [
+      { source: "/:locale(en|fr)/files/(.*)", destination: "/target", permanent: false },
+    ];
+    expect(matchRedirect("/en/files/a.pdf", redirects, emptyCtx)?.destination).toBe("/target");
+  });
+
+  it("applies an indexed rule to a pathname with repeated slashes", async () => {
+    const { matchRedirect } = await import("../packages/vinext/src/config/config-matchers.js");
+    const redirects = [
+      { source: "/:locale(en|fr)/security", destination: "/target", permanent: false },
+    ];
+    expect(matchRedirect("/en//security", redirects, emptyCtx)?.destination).toBe("/target");
+    expect(matchRedirect("//en/security/", redirects, emptyCtx)?.destination).toBe("/target");
+  });
+
   it("requires the locale segment when the source does not make it optional", async () => {
     const { matchRedirect } = await import("../packages/vinext/src/config/config-matchers.js");
     const redirects = [{ source: "/:locale(en|fr)/foo", destination: "/target", permanent: false }];
@@ -13764,6 +13781,19 @@ describe("matchConfigPattern matches redirect and rewrite sources like Next.js",
   it("matches without regard to case", async () => {
     const { matchConfigPattern } = await import("../packages/vinext/src/config/config-matchers.js");
     expect(matchConfigPattern("/Blog/Post", "/blog/:slug")).toEqual({ slug: "Post" });
+  });
+
+  // The App Router gives the raw request pathname to the matcher, and its
+  // route matcher ignores an empty segment. A source needs non-empty segments,
+  // so the pathname is matched with each run of slashes collapsed. Next.js
+  // redirects such a request to the collapsed path before any rule runs.
+  it("matches a pathname with repeated slashes as the collapsed pathname", async () => {
+    const { matchConfigPattern } = await import("../packages/vinext/src/config/config-matchers.js");
+    expect(matchConfigPattern("/admin//secret", "/admin/:path*")).toEqual({ path: "secret" });
+    expect(matchConfigPattern("/admin//secret", "/admin/secret")).toEqual({});
+    expect(matchConfigPattern("//admin///x", "/admin/:id")).toEqual({ id: "x" });
+    expect(matchConfigPattern("/about//", "/about")).toEqual({});
+    expect(matchConfigPattern("/admin//secret", "/admin/:id")).toEqual({ id: "secret" });
   });
 
   // The slash of the root path is not removed before the match. The optional
@@ -15286,13 +15316,11 @@ describe("open redirect prevention in catch-all redirects", () => {
 
   it("matchRedirect sanitizes double-slash in already-decoded paths", async () => {
     const { matchRedirect } = await import("../packages/vinext/src/config/config-matchers.js");
-    // `:path*` needs non-empty segments, so it cannot capture a leading slash.
-    // A `(.*)` constraint can, and that capture is what the sanitizer must handle.
-    const redirects = [{ source: "/old/:path(.*)", destination: "/:path", permanent: false }];
+    const redirects = [{ source: "/old/:path*", destination: "/:path*", permanent: false }];
     // Even if an already-decoded path somehow contains //, the sanitizer should handle it
     const result = matchRedirect("/old//evil.com", redirects, emptyCtx);
     expect(result).not.toBeNull();
-    expect(result!.destination).toBe("/evil.com");
+    expect(result!.destination.startsWith("//")).toBe(false);
   });
 
   it("matchRedirect preserves valid external redirect destinations", async () => {

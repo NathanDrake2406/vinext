@@ -641,6 +641,22 @@ function stripTrailingSlashForConfigMatch(value: string): string {
 }
 
 /**
+ * Collapse each run of slashes in a pathname to one slash for config-source
+ * matching.
+ *
+ * The App Router matches config sources against the raw request pathname,
+ * and its route matcher ignores an empty segment, so `/admin//secret` reaches
+ * the page `/admin/secret`. A source needs non-empty segments. Without this
+ * step `/admin/:path*` would not match that request, and a redirect that
+ * guards the section would not run. Next.js redirects a request with a
+ * repeated slash to the collapsed path before it evaluates any rule, so the
+ * rule sees the collapsed path there too.
+ */
+function collapseSlashesForConfigMatch(pathname: string): string {
+  return pathname.includes("//") ? pathname.replace(/\/{2,}/g, "/") : pathname;
+}
+
+/**
  * Match a Next.js config pattern (from redirects/rewrites sources) against a pathname.
  * Returns matched params or null.
  *
@@ -664,6 +680,7 @@ export function matchConfigPattern(
   pathname: string,
   pattern: string,
 ): Record<string, string> | null {
+  pathname = collapseSlashesForConfigMatch(pathname);
   const pathnameHadTrailingSlash = pathname.length > 1 && pathname.endsWith("/");
   pathname = stripTrailingSlashForConfigMatch(pathname);
   if (pathnameHadTrailingSlash) pattern = stripTrailingSlashForConfigMatch(pattern);
@@ -750,7 +767,11 @@ export function matchRedirect(
   // pathname) matches keys derived from slash-free source patterns. The
   // linear fallback receives the original pathname so matchConfigPattern can
   // apply the same optional-slash behavior to slash-ending source patterns.
-  const normalizedPathname = stripTrailingSlashForConfigMatch(pathname);
+  // Repeated slashes are collapsed here as matchConfigPattern collapses them,
+  // so the fast path and the linear path see the same segments.
+  const normalizedPathname = stripTrailingSlashForConfigMatch(
+    collapseSlashesForConfigMatch(pathname),
+  );
 
   const index = _getRedirectIndex(redirects);
 

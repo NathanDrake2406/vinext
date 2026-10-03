@@ -70,10 +70,10 @@ export function matchSimpleClientConfigPattern(
   const segments = parseSimpleSource(source);
   if (!segments || NOT_PRINTABLE_ASCII.test(pathname)) return undefined;
 
-  // The real matcher removes one trailing slash from the pathname. A pathname
-  // that ends in two is left to it.
+  // The real matcher collapses repeated slashes and removes one trailing
+  // slash from the pathname. A pathname with a repeated slash is left to it.
+  if (!pathname.startsWith("/") || pathname.includes("//")) return undefined;
   const path = pathname.length > 1 && pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
-  if (!path.startsWith("/") || (path.length > 1 && path.endsWith("/"))) return undefined;
 
   const pathParts = path === "/" ? [] : path.slice(1).split("/");
   const params: Record<string, string> = Object.create(null);
@@ -85,12 +85,13 @@ export function matchSimpleClientConfigPattern(
     if (segment.kind === "literal") {
       if (pathPart?.toLowerCase() !== segment.text) return null;
     } else if (segment.kind === "param") {
-      // A param needs a non-empty segment, so `/:section` does not match `/`.
-      if (!pathPart) return null;
+      // A param needs a segment, so `/:section` does not match `/`. The
+      // pathname has no repeated slash here, so a segment is never empty.
+      if (pathPart === undefined) return null;
       params[segment.name] = pathPart;
     } else {
       const rest = pathParts.slice(index);
-      if (rest.includes("") || (segment.required && rest.length === 0)) return null;
+      if (segment.required && rest.length === 0) return null;
       // An empty catch-all must not erase a param of the same name (`/:id/:id*`).
       if (rest.length > 0 || !(segment.name in params)) params[segment.name] = rest.join("/");
       return params;
@@ -115,8 +116,10 @@ export function simpleClientConfigSourceCouldMatch(pathname: string, source: str
     syntaxIndex === -1
       ? source
       : source.slice(0, Math.max(0, source.lastIndexOf("/", syntaxIndex)));
-  // Trailing slashes are removed from both sides, so that a doubled slash in
-  // the source (`/a//:x*`) does not ask the pathname for a slash it has lost.
+  // The real matcher collapses repeated slashes in the pathname. Trailing
+  // slashes are removed from both sides, so that a doubled slash in the
+  // source (`/a//:x*`) does not ask the pathname for a slash it has lost.
   const literalPrefix = removeTrailingSlash(literalText).toLowerCase();
-  return removeTrailingSlash(pathname).toLowerCase().startsWith(literalPrefix);
+  const collapsedPathname = pathname.replace(/\/{2,}/g, "/");
+  return removeTrailingSlash(collapsedPathname).toLowerCase().startsWith(literalPrefix);
 }
