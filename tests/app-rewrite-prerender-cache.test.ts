@@ -404,6 +404,7 @@ describe("next.config rewrite sources that differ only by letter case", () => {
 
 describe("a Pages Router route that owns a rewrite source URL in a hybrid build", () => {
   let root = "";
+  let routes: ManifestRoute[] = [];
   let server: Server | undefined;
   let baseUrl = "";
   let callLog: ReturnType<typeof createCallLog> | undefined;
@@ -411,7 +412,7 @@ describe("a Pages Router route that owns a rewrite source URL in a hybrid build"
 
   beforeAll(async () => {
     callLog = createCallLog();
-    ({ root } = await buildFixture(
+    ({ root, routes } = await buildFixture(
       `export default {
   async rewrites() {
     return {
@@ -422,6 +423,7 @@ describe("a Pages Router route that owns a rewrite source URL in a hybrid build"
 };
 `,
       {
+        "app/[locale]/about/page.tsx": LOCALE_PAGE("about", 2),
         "app/[locale]/feed/page.tsx": LOCALE_PAGE("feed", 2),
         "pages/feed.tsx": `import fs from "node:fs";
 
@@ -453,6 +455,17 @@ export default function Feed() {
     const response = await fetch(`${baseUrl}/feed`);
     expect(response.status).toBe(200);
     expect(await response.text()).toContain("pages feed");
+  });
+
+  // In a hybrid build, the prerender sends its requests to a server over HTTP.
+  it("does not stop the seeding of a source URL that no Pages route owns", async () => {
+    expect(routes.flatMap((route) => route.rewrite?.source ?? [])).toEqual(["/about"]);
+
+    const response = await fetch(`${baseUrl}/about`);
+    expect(response.headers.get("x-vinext-cache")).toBe("HIT");
+    const html = await response.text();
+    expect(html).toContain("page:about:en");
+    expect(html).toContain("pathname:/about");
   });
 });
 
