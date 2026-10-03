@@ -692,7 +692,12 @@ export function matchConfigPattern(
   const params: Record<string, string> = Object.create(null);
   for (let i = 0; i < compiled.paramNames.length; i++) {
     const name = compiled.paramNames[i];
-    if (name !== null) params[name] = match[i + 1] ?? "";
+    if (name === null) continue;
+    const value = match[i + 1];
+    // A name can repeat (`/:id/:id?`). A group that took no part in the match
+    // must not erase the value that an earlier group captured.
+    if (value !== undefined) params[name] = value;
+    else if (!(name in params)) params[name] = "";
   }
   return params;
 }

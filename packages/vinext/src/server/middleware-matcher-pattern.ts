@@ -1,6 +1,7 @@
 import type { HasCondition } from "../config/next-config.js";
 import { analyzeRegexSafety, regexAtomsMayOverlap } from "../utils/regex-safety.js";
 import {
+  middlewarePathSegmentPattern,
   middlewarePathTokensToRegExp,
   normalizeMiddlewarePathTokens,
   parseMiddlewarePath,
@@ -215,14 +216,60 @@ function hasOverlappingSequentialRepetition(pattern: string): boolean {
   return false;
 }
 
-function unsafeTokenReason(token: MiddlewarePathKey): string | null {
-  const regexSafetyIssue = analyzeRegexSafety(token.pattern, { ignoreCase: true });
-  if (regexSafetyIssue) {
-    if (regexSafetyIssue === "analysis budget exceeded") {
-      return `parameter "${token.name}" exceeds the regex analysis budget`;
-    }
-    return `parameter "${token.name}" contains ${regexSafetyIssue}`;
+function regexSafetyReason(token: MiddlewarePathKey, pattern: string): string | null {
+  const regexSafetyIssue = analyzeRegexSafety(pattern, { ignoreCase: true });
+  if (!regexSafetyIssue) return null;
+  if (regexSafetyIssue === "analysis budget exceeded") {
+    return `parameter "${token.name}" exceeds the regex analysis budget`;
   }
+  return `parameter "${token.name}" contains ${regexSafetyIssue}`;
+}
+
+/**
+ * Whether an atom of `pattern` can match one of `characters`. The scan reads
+ * every character outside a class, an escape, or a quantifier as a literal.
+ * It can therefore report a match that the regex cannot make, but it never
+ * misses one.
+ */
+function patternMayConsume(pattern: string, characters: string): boolean {
+  for (let index = 0; index < pattern.length; index++) {
+    let atom = pattern[index];
+    if (atom === "\\") {
+      if (index + 1 >= pattern.length) return true;
+      atom += pattern[++index];
+    } else if (atom === "[") {
+      let classEnd = index + 1;
+      if (pattern[classEnd] === "^") classEnd++;
+      while (classEnd < pattern.length && pattern[classEnd] !== "]") {
+        if (pattern[classEnd] === "\\") classEnd++;
+        classEnd++;
+      }
+      if (classEnd >= pattern.length) return true;
+      atom = pattern.slice(index, classEnd + 1);
+      index = classEnd;
+    } else if (atom === "{") {
+      const quantifier = /^\{\d+(?:,\d*)?\}/.exec(pattern.slice(index));
+      if (quantifier) {
+        index += quantifier[0].length - 1;
+        continue;
+      }
+    } else if ("()|?*+^$".includes(atom)) {
+      continue;
+    }
+
+    for (const character of characters) {
+      // `\d`, `\w`, `\s` and `\b` are classes, so only punctuation is escaped.
+      if (atomsOverlap(atom, /\w/.test(character) ? character : `\\${character}`)) return true;
+    }
+  }
+  return false;
+}
+
+type UnsafeTokenReason = (token: MiddlewarePathKey) => string | null;
+
+function unsafeTokenReason(token: MiddlewarePathKey): string | null {
+  const regexSafetyIssue = regexSafetyReason(token, token.pattern);
+  if (regexSafetyIssue) return regexSafetyIssue;
   if (hasOverlappingSequentialRepetition(token.pattern)) {
     return `parameter "${token.name}" contains overlapping sequential repetition`;
   }
@@ -241,10 +288,47 @@ function unsafeTokenReason(token: MiddlewarePathKey): string | null {
   return null;
 }
 
-function validateTokens(tokens: MiddlewarePathToken[]): string | null {
+const CUSTOM_ROUTE_DELIMITER = "/";
+
+/**
+ * Safety check for a `redirects()` / `rewrites()` source token.
+ *
+ * A constraint that is not repeated gets the structural scan only. Middleware
+ * matchers also refuse overlapping sequential repetition such as
+ * `[a-z0-9]+[a-z0-9-]*`, but that shape is polynomial, common in slug
+ * constraints, and accepted by Next.js.
+ *
+ * A repeated param compiles to `P(?:/P)*`. Every way to split the path into
+ * segments, and every way to match one segment, multiplies across the
+ * repetition. The compiled regex is therefore linear only when:
+ *   - `P` cannot match an empty value or the separator, so the split is
+ *     unique, and
+ *   - `P` matches one segment in one way. The unconstrained pattern is one
+ *     repeated character class, which does. Any other `P` must pass the
+ *     structural scan as the body of a repetition.
+ */
+function unsafeCustomRouteTokenReason(token: MiddlewarePathKey): string | null {
+  const regexSafetyIssue = regexSafetyReason(token, token.pattern);
+  if (regexSafetyIssue) return regexSafetyIssue;
+  if (token.modifier !== "*" && token.modifier !== "+") return null;
+
+  if (
+    patternMatches(token.pattern, "") ||
+    patternMayConsume(token.pattern, token.suffix + token.prefix)
+  ) {
+    return `repeated parameter "${token.name}" may match an empty value or its separator`;
+  }
+  if (token.pattern === middlewarePathSegmentPattern(CUSTOM_ROUTE_DELIMITER)) return null;
+  return regexSafetyReason(token, `(?:${token.pattern})*`);
+}
+
+function validateTokens(
+  tokens: MiddlewarePathToken[],
+  unsafeReason: UnsafeTokenReason,
+): string | null {
   for (const token of tokens) {
     if (typeof token === "string") continue;
-    const reason = unsafeTokenReason(token);
+    const reason = unsafeReason(token);
     if (reason) return reason;
   }
   return null;
@@ -253,11 +337,12 @@ function validateTokens(tokens: MiddlewarePathToken[]): string | null {
 type SourcePatternOptions = {
   delimiter?: string;
   normalizeUnprefixedRepeats: boolean;
+  unsafeReason: UnsafeTokenReason;
 };
 
 function compileSourcePattern(
   source: string,
-  { delimiter, normalizeUnprefixedRepeats }: SourcePatternOptions,
+  { delimiter, normalizeUnprefixedRepeats, unsafeReason }: SourcePatternOptions,
 ): CompiledCustomRouteSourcePattern {
   if (!source.startsWith("/")) {
     return { kind: "invalid", error: "source must start with /" };
@@ -276,8 +361,8 @@ function compileSourcePattern(
     };
   }
 
-  const unsafeReason = validateTokens(tokens);
-  if (unsafeReason) return { kind: "unsafe", error: unsafeReason };
+  const unsafeTokenIssue = validateTokens(tokens, unsafeReason);
+  if (unsafeTokenIssue) return { kind: "unsafe", error: unsafeTokenIssue };
 
   try {
     const keys: MiddlewarePathKey[] = [];
@@ -292,7 +377,7 @@ function compileSourcePattern(
     // Match Next.js 16.2.7's path-to-regexp 6.3 normalization: repeating
     // tokens without a prefix/suffix receive a slash prefix and are retried.
     const normalizedTokens = normalizeMiddlewarePathTokens(tokens);
-    const normalizedUnsafeReason = validateTokens(normalizedTokens);
+    const normalizedUnsafeReason = validateTokens(normalizedTokens, unsafeReason);
     if (normalizedUnsafeReason) return { kind: "unsafe", error: normalizedUnsafeReason };
     try {
       const keys: MiddlewarePathKey[] = [];
@@ -307,7 +392,10 @@ function compileSourcePattern(
 }
 
 export function compileMiddlewareMatcherPattern(source: string): CompiledMiddlewareMatcherPattern {
-  return compileSourcePattern(source, { normalizeUnprefixedRepeats: true });
+  return compileSourcePattern(source, {
+    normalizeUnprefixedRepeats: true,
+    unsafeReason: unsafeTokenReason,
+  });
 }
 
 /**
@@ -321,7 +409,11 @@ export function compileMiddlewareMatcherPattern(source: string): CompiledMiddlew
  * @see .nextjs-ref/packages/next/src/shared/lib/router/utils/path-match.ts
  */
 export function compileCustomRouteSourcePattern(source: string): CompiledCustomRouteSourcePattern {
-  return compileSourcePattern(source, { delimiter: "/", normalizeUnprefixedRepeats: false });
+  return compileSourcePattern(source, {
+    delimiter: CUSTOM_ROUTE_DELIMITER,
+    normalizeUnprefixedRepeats: false,
+    unsafeReason: unsafeCustomRouteTokenReason,
+  });
 }
 
 export function validateMiddlewareMatcherPatterns(value: unknown): void {

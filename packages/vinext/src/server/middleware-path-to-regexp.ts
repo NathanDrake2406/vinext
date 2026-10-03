@@ -122,6 +122,14 @@ function lexer(value: string): LexerToken[] {
 
 const MIDDLEWARE_DELIMITER = "/#?";
 
+/**
+ * The pattern of a param that has no constraint of its own and follows a
+ * delimiter: a lazy run of non-delimiter characters.
+ */
+export function middlewarePathSegmentPattern(delimiter: string = MIDDLEWARE_DELIMITER): string {
+  return `[^${escapeRegex(delimiter)}]+?`;
+}
+
 export function parseMiddlewarePath(
   value: string,
   delimiter: string = MIDDLEWARE_DELIMITER,
@@ -171,7 +179,9 @@ export function parseMiddlewarePath(
       const name = typeof previous === "string" ? previous : previous.name;
       throw new TypeError(`Must have text between two parameters, missing text after "${name}"`);
     }
-    if (!previousText || containsDelimiter(previousText)) return `${segmentCharacter}+?`;
+    if (!previousText || containsDelimiter(previousText)) {
+      return middlewarePathSegmentPattern(delimiter);
+    }
     return `(?:(?!${escapeRegex(previousText)})${segmentCharacter})+?`;
   };
 

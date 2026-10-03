@@ -13321,6 +13321,43 @@ describe("matchConfigPattern rejects ReDoS patterns", () => {
     // lgtm[js/redos] — deliberate pathological regex to test the safety guard
     const result = matchConfigPattern("/aaaaaaaaaaaaaaaaaaaac", "/:id((?:a+)+b)");
     expect(result).toBeNull();
+    // `/aab` satisfies the constraint. A null result therefore proves that
+    // the source was refused, not that the path did not match.
+    expect(matchConfigPattern("/aab", "/:id((?:a+)+b)")).toBeNull();
+  });
+
+  // A repeated param compiles to `P(?:/P)*`. Each path below satisfies the
+  // regex that Next.js compiles, and that regex backtracks exponentially on a
+  // near miss, so the source must be refused.
+  it("refuses a repeated param whose constraint can match its separator", async () => {
+    const { matchConfigPattern } = await import("../packages/vinext/src/config/config-matchers.js");
+    expect(matchConfigPattern("/docs/a/b", "/docs/:path([a-z0-9][a-z0-9/-]*)*")).toBeNull();
+    expect(matchConfigPattern("/a/a/z", "/:p(a/a|a)+/z")).toBeNull();
+    expect(matchConfigPattern("/a/b", "/:path(.*)*")).toBeNull();
+    // The separator here is `-`, which the unconstrained pattern can match.
+    expect(matchConfigPattern("/xa-b-", "/x{:a-}*")).toBeNull();
+  });
+
+  it("refuses a repeated param whose constraint can match one segment in two ways", async () => {
+    const { matchConfigPattern } = await import("../packages/vinext/src/config/config-matchers.js");
+    expect(matchConfigPattern("/a/a/z", "/(a|a)+/z")).toBeNull();
+    expect(matchConfigPattern("/1/2/z", "/:p(\\w+|\\d+)+/z")).toBeNull();
+  });
+
+  it("accepts a repeated param whose constraint has one way to match a segment", async () => {
+    const { matchConfigPattern } = await import("../packages/vinext/src/config/config-matchers.js");
+    expect(matchConfigPattern("/en/fr/x", "/:lang(en|fr)+/x")).toEqual({ lang: "en/fr" });
+    expect(matchConfigPattern("/12/34/x", "/:p(\\d{2})+/x")).toEqual({ p: "12/34" });
+  });
+
+  // Two repetitions that can match the same characters are polynomial, not
+  // exponential. Next.js accepts them, and they are common in slug constraints.
+  it("accepts a constraint with overlapping sequential repetition", async () => {
+    const { matchConfigPattern } = await import("../packages/vinext/src/config/config-matchers.js");
+    expect(matchConfigPattern("/my-post-1", "/:slug([a-z0-9]+[a-z0-9-]*)")).toEqual({
+      slug: "my-post-1",
+    });
+    expect(matchConfigPattern("/post/12ab", "/post/:id(\\d+\\w*)")).toEqual({ id: "12ab" });
   });
 });
 
@@ -13363,9 +13400,9 @@ describe("matchConfigPattern compiled pattern cache", () => {
     const { matchConfigPattern } = await import("../packages/vinext/src/config/config-matchers.js");
     // lgtm[js/redos] — deliberate pathological regex to test cache-of-null path
     const unsafe = "/:id((?:a+)+b)";
-    expect(matchConfigPattern("/x", unsafe)).toBeNull();
+    expect(matchConfigPattern("/aab", unsafe)).toBeNull();
     // Second call must not re-run the safety scan — just return null from cache.
-    expect(matchConfigPattern("/x", unsafe)).toBeNull();
+    expect(matchConfigPattern("/aab", unsafe)).toBeNull();
   });
 });
 
@@ -13594,6 +13631,16 @@ describe("matchRedirect locale-static index", () => {
     expect(matchRedirect("/a/b/foo", redirects, emptyCtx)?.destination).toBe("/target");
     expect(matchRedirect("/a/b/bar", redirects, emptyCtx)).toBeNull();
   });
+
+  it("does not read a hyphen as part of the leading param name", async () => {
+    const { matchRedirect } = await import("../packages/vinext/src/config/config-matchers.js");
+    // The param is `my`. `-locale` is literal text and `(en|fr)` is an unnamed group.
+    const redirects = [
+      { source: "/:my-locale(en|fr)/foo", destination: "/target", permanent: false },
+    ];
+    expect(matchRedirect("/x-localeen/foo", redirects, emptyCtx)?.destination).toBe("/target");
+    expect(matchRedirect("/en/foo", redirects, emptyCtx)).toBeNull();
+  });
 });
 
 describe("matchConfigPattern handles parameterized suffix patterns", () => {
@@ -13660,6 +13707,18 @@ describe("matchConfigPattern matches redirect and rewrite sources like Next.js",
     expect(matchConfigPattern("/a", "/:section")).toEqual({ section: "a" });
   });
 
+  // The pathname is already decoded and has no query or hash, so only `/`
+  // ends a segment. path-to-regexp's default delimiter is `/#?`.
+  it("does not end a segment at a decoded # or ?", async () => {
+    const { matchConfigPattern } = await import("../packages/vinext/src/config/config-matchers.js");
+    expect(matchConfigPattern("/blog/a#b?c", "/blog/:slug")).toEqual({ slug: "a#b?c" });
+  });
+
+  it("matches without regard to case", async () => {
+    const { matchConfigPattern } = await import("../packages/vinext/src/config/config-matchers.js");
+    expect(matchConfigPattern("/Blog/Post", "/blog/:slug")).toEqual({ slug: "Post" });
+  });
+
   it("ignores a source that Next.js rejects at build time, and warns once", async () => {
     const { matchConfigPattern } = await import("../packages/vinext/src/config/config-matchers.js");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -13670,6 +13729,11 @@ describe("matchConfigPattern matches redirect and rewrite sources like Next.js",
       expect(matchConfigPattern("/rejected-source-3677/*", source)).toBeNull();
       expect(warn).toHaveBeenCalledTimes(1);
       expect(warn.mock.calls[0][0]).toContain(source);
+
+      // A repeat needs a `/` prefix. Middleware matchers add one; Next.js
+      // does not do that for a redirect or rewrite source.
+      expect(matchConfigPattern("/foo-", "/foo-:id*")).toBeNull();
+      expect(matchConfigPattern("/foo-/a", "/foo-:id*")).toBeNull();
     } finally {
       warn.mockRestore();
     }
@@ -13695,6 +13759,8 @@ describe("matchConfigPattern matches redirect and rewrite sources like Next.js",
       ["/:section", ["/", "/a", "/a/b"]],
       ["/:year-:month", ["/2024-06", "/2024", "/2024-06-01"]],
       ["/img/:name.:ext", ["/img/a.png", "/img/a", "/img/a.b.png"]],
+      // A repeated name: the optional group must not erase the first capture.
+      ["/:id/:id?", ["/a", "/a/b"]],
     ];
 
     // Next.js omits an optional param that did not match and returns a
