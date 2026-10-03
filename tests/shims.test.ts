@@ -13832,6 +13832,109 @@ describe("matchConfigPattern matches redirect and rewrite sources like Next.js",
   });
 });
 
+// The Pages Router client answers simple sources with a synchronous shortcut
+// and loads matchConfigPattern only when the shortcut cannot decide. The
+// shortcut has no meaning of its own: matchConfigPattern is the oracle.
+describe("client source shortcut agrees with matchConfigPattern", () => {
+  it("answers simple sources and defers the rest", async () => {
+    const { matchSimpleClientConfigPattern, simpleClientConfigSourceCouldMatch } =
+      await import("../packages/vinext/src/client/client-simple-source-matcher.js");
+
+    expect(matchSimpleClientConfigPattern("/blog/x", "/blog/:slug")).toEqual({ slug: "x" });
+    expect(matchSimpleClientConfigPattern("/", "/:section")).toBeNull();
+    expect(matchSimpleClientConfigPattern("/docs/a/b", "/docs/:path*")).toEqual({ path: "a/b" });
+    expect(matchSimpleClientConfigPattern("/shop", "/shop/:id?")).toBeUndefined();
+    expect(matchSimpleClientConfigPattern("/auth/google", "/auth/:auth-method")).toBeUndefined();
+    // The `/` before `:path*` is optional with it, so this source matches
+    // `/docs.md`. A literal mismatch on `docs` must not answer "no match".
+    expect(matchSimpleClientConfigPattern("/docs.md", "/docs/:path*.md")).toBeUndefined();
+    expect(simpleClientConfigSourceCouldMatch("/docs.md", "/docs/:path*.md")).toBe(true);
+    expect(simpleClientConfigSourceCouldMatch("/legacy-x", "/legacy-(.*)")).toBe(true);
+    expect(simpleClientConfigSourceCouldMatch("/other", "/docs/:path*.md")).toBe(false);
+  });
+
+  it("never contradicts matchConfigPattern", async () => {
+    const { matchConfigPattern } = await import("../packages/vinext/src/config/config-matchers.js");
+    const { matchSimpleClientConfigPattern, simpleClientConfigSourceCouldMatch } =
+      await import("../packages/vinext/src/client/client-simple-source-matcher.js");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    // Every source is: leading simple segments, one segment under test, and
+    // an optional trailing literal segment.
+    const leads = [[], ["a"], ["a", "b"], [":p"], ["a", ":p"], [":p", "b"], [":x"]];
+    const parts = [
+      "b",
+      "B",
+      ":x",
+      ":x?",
+      ":x*",
+      ":x+",
+      ":x?.json",
+      ":x*.md",
+      ":x+.md",
+      ":x.:y",
+      ":x-y",
+      ":x(\\d+)",
+      ":x*/edit",
+      "(.*)",
+      "(.*)b",
+      "{:x}?",
+      "{-:x}?",
+      "a{b}",
+      "b\\+",
+      "",
+    ];
+    const tails = [[], ["c"]];
+    const segments = ["a", "b", "c", "A", "ab", "a.md", "b.json", "b-y", "edit", "1", "b+", ""];
+    const pathnames = ["/", "//"];
+    for (const first of segments) {
+      pathnames.push(`/${first}`, `/${first}/`);
+      for (const second of segments) {
+        pathnames.push(`/${first}/${second}`);
+        for (const third of ["a", "c", "edit", "b.md", ""]) {
+          pathnames.push(`/${first}/${second}/${third}`, `/${first}/${second}/${third}/c`);
+        }
+      }
+    }
+
+    const wrongAnswers: string[] = [];
+    const wrongRejections: string[] = [];
+    let definiteAnswers = 0;
+    try {
+      for (const lead of leads) {
+        for (const part of parts) {
+          for (const tail of tails) {
+            const source = `/${[...lead, part, ...tail].join("/")}`;
+            for (const pathname of pathnames) {
+              const expected = matchConfigPattern(pathname, source);
+              const answer = matchSimpleClientConfigPattern(pathname, source);
+              if (answer !== undefined) {
+                definiteAnswers++;
+                const same =
+                  answer === null || expected === null
+                    ? answer === expected
+                    : Object.keys(answer).length === Object.keys(expected).length &&
+                      Object.keys(answer).every((key) => answer[key] === expected[key]);
+                if (!same) wrongAnswers.push(`${source} vs ${pathname}`);
+              }
+              if (expected !== null && !simpleClientConfigSourceCouldMatch(pathname, source)) {
+                wrongRejections.push(`${source} vs ${pathname}`);
+              }
+            }
+          }
+        }
+      }
+    } finally {
+      warn.mockRestore();
+    }
+
+    expect(wrongAnswers).toEqual([]);
+    expect(wrongRejections).toEqual([]);
+    // The shortcut must still answer the simple sources, or the check above is empty.
+    expect(definiteAnswers).toBeGreaterThan(10_000);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // has/missing condition matching unit tests (next.config.js redirects/rewrites)
 
