@@ -13650,6 +13650,13 @@ describe("matchRedirect locale-static index", () => {
     const redirects = [{ source: "/:prefix(.*)/foo", destination: "/target", permanent: false }];
     expect(matchRedirect("/a/b/foo", redirects, emptyCtx)?.destination).toBe("/target");
     expect(matchRedirect("/a/b/bar", redirects, emptyCtx)).toBeNull();
+
+    // An alternative with a slash looks like a locale list but is not one.
+    const twoSegmentLocale = [
+      { source: "/:locale(en/us|fr)/foo", destination: "/target", permanent: false },
+    ];
+    expect(matchRedirect("/en/us/foo", twoSegmentLocale, emptyCtx)?.destination).toBe("/target");
+    expect(matchRedirect("/fr/foo", twoSegmentLocale, emptyCtx)?.destination).toBe("/target");
   });
 
   it("requires the locale segment when the source does not make it optional", async () => {
@@ -13717,6 +13724,14 @@ describe("matchConfigPattern matches redirect and rewrite sources like Next.js",
     expect(
       matchConfigPattern("/unnamed-params/nested/a/b/c", "/unnamed-params/nested/(.*)/:test/(.*)"),
     ).toEqual({ test: "b" });
+  });
+
+  // `{b}` has no pattern, so it adds no capture group and no key.
+  it("matches an optional group of literal text", async () => {
+    const { matchConfigPattern } = await import("../packages/vinext/src/config/config-matchers.js");
+    expect(matchConfigPattern("/ab/1", "/a{b}?/:id")).toEqual({ id: "1" });
+    expect(matchConfigPattern("/a/1", "/a{b}?/:id")).toEqual({ id: "1" });
+    expect(matchConfigPattern("/ac/1", "/a{b}?/:id")).toBeNull();
   });
 
   it("makes the slash before an optional or catch-all param optional with it", async () => {
@@ -13897,33 +13912,52 @@ describe("client source shortcut agrees with matchConfigPattern", () => {
       }
     }
 
+    // Pairs outside that grid, one for each rule of the shortcut that the
+    // grid does not reach.
+    const extraPairs: Array<[source: string, pathname: string]> = [
+      // The regex `i` flag does not fold the Kelvin sign to `k`; toLowerCase() does.
+      ["/K", "/k"],
+      ["/k", "/K"],
+      // The `i` flag folds both sigma forms to one letter; toLowerCase() does not.
+      ["/σ/:x", "/ς/a"],
+      // An escape is source syntax: `\-` is the literal `-`.
+      ["/a\\-b", "/a-b"],
+      // A param name that is also a property of Object.prototype.
+      ["/:__proto__", "/a"],
+      // A doubled slash in the source, in front of an optional catch-all.
+      ["/a//:x*", "/a//"],
+      ["/a//:x*", "/a"],
+    ];
+
     const wrongAnswers: string[] = [];
     const wrongRejections: string[] = [];
     let definiteAnswers = 0;
+    const compare = (source: string, pathname: string) => {
+      const expected = matchConfigPattern(pathname, source);
+      const answer = matchSimpleClientConfigPattern(pathname, source);
+      if (answer !== undefined) {
+        definiteAnswers++;
+        const same =
+          answer === null || expected === null
+            ? answer === expected
+            : Object.keys(answer).length === Object.keys(expected).length &&
+              Object.keys(answer).every((key) => answer[key] === expected[key]);
+        if (!same) wrongAnswers.push(`${source} vs ${pathname}`);
+      }
+      if (expected !== null && !simpleClientConfigSourceCouldMatch(pathname, source)) {
+        wrongRejections.push(`${source} vs ${pathname}`);
+      }
+    };
     try {
       for (const lead of leads) {
         for (const part of parts) {
           for (const tail of tails) {
             const source = `/${[...lead, part, ...tail].join("/")}`;
-            for (const pathname of pathnames) {
-              const expected = matchConfigPattern(pathname, source);
-              const answer = matchSimpleClientConfigPattern(pathname, source);
-              if (answer !== undefined) {
-                definiteAnswers++;
-                const same =
-                  answer === null || expected === null
-                    ? answer === expected
-                    : Object.keys(answer).length === Object.keys(expected).length &&
-                      Object.keys(answer).every((key) => answer[key] === expected[key]);
-                if (!same) wrongAnswers.push(`${source} vs ${pathname}`);
-              }
-              if (expected !== null && !simpleClientConfigSourceCouldMatch(pathname, source)) {
-                wrongRejections.push(`${source} vs ${pathname}`);
-              }
-            }
+            for (const pathname of pathnames) compare(source, pathname);
           }
         }
       }
+      for (const [source, pathname] of extraPairs) compare(source, pathname);
     } finally {
       warn.mockRestore();
     }

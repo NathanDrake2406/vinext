@@ -111,9 +111,12 @@ export function matchSimpleClientConfigPattern(
 export function simpleClientConfigSourceCouldMatch(pathname: string, source: string): boolean {
   if (NOT_PRINTABLE_ASCII.test(source + pathname)) return true;
   const syntaxIndex = source.search(SOURCE_SYNTAX);
-  const literalPrefix =
+  const literalText =
     syntaxIndex === -1
-      ? removeTrailingSlash(source)
+      ? source
       : source.slice(0, Math.max(0, source.lastIndexOf("/", syntaxIndex)));
-  return removeTrailingSlash(pathname).toLowerCase().startsWith(literalPrefix.toLowerCase());
+  // Trailing slashes are removed from both sides, so that a doubled slash in
+  // the source (`/a//:x*`) does not ask the pathname for a slash it has lost.
+  const literalPrefix = removeTrailingSlash(literalText).toLowerCase();
+  return removeTrailingSlash(pathname).toLowerCase().startsWith(literalPrefix);
 }
