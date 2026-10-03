@@ -456,6 +456,57 @@ export default function Feed() {
   });
 });
 
+describe("a rewrite source URL that the request handler resolves to another owner", () => {
+  let root = "";
+  let routes: ManifestRoute[] = [];
+  let server: Server | undefined;
+  let baseUrl = "";
+  let callLog: ReturnType<typeof createCallLog> | undefined;
+  let callsDuringBuild = "";
+
+  beforeAll(async () => {
+    callLog = createCallLog();
+    ({ root, routes } = await buildFixture(
+      // A request has the percent-encoded spelling of this source, which the
+      // rule does not match. The config alone does not show that.
+      `export default {
+  async rewrites() {
+    return { afterFiles: [{ source: "/shop/über-uns", destination: "/about" }] };
+  },
+};
+`,
+      {
+        "app/about/page.tsx": `export default function Page() {
+  return <p>about</p>;
+}
+`,
+        "app/shop/[item]/route.ts": `import fs from "node:fs";
+
+export async function GET() {
+  fs.appendFileSync(process.env.VINEXT_TEST_CALL_LOG, "GET /shop/[item]\\n");
+  return new Response("shop route handler");
+}
+`,
+      },
+    ));
+    callsDuringBuild = callLog.read();
+    ({ server, baseUrl } = await startServer(root));
+  }, 180_000);
+
+  afterAll(async () => {
+    await stop(server, root);
+    callLog?.remove();
+  });
+
+  it("does not run that owner during the build, and seeds nothing for the URL", async () => {
+    expect(callsDuringBuild).toBe("");
+    expect(routes.filter((route) => route.rewrite)).toEqual([]);
+
+    const response = await fetch(`${baseUrl}/shop/${encodeURIComponent("über-uns")}`);
+    expect(await response.text()).toBe("shop route handler");
+  });
+});
+
 describe("static export with next.config rewrites", () => {
   it("does not write rewrite source artifacts into the public export directory", async () => {
     const { root, routes } = await buildFixture(

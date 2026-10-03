@@ -53,25 +53,54 @@ export function isRewriteCachePathnameOf(
   );
 }
 
-/**
- * The prerender asks for the confirmation only on its request for a rewrite
- * source URL. The header grows with the pathname, and Node's fetch rejects a
- * response with more than about 16 KB of headers, so no other prerender
- * response must carry it.
- */
-export const PRERENDER_CACHE_IDENTITY_REQUEST = "1";
+// ── The rewrite source probe of the prerender ──────────────────────────────────
+//
+// The prerender requests a public URL that it expects a rewrite to resolve to a
+// prerendered page. Only the request handler knows how redirects, middleware,
+// routes and the rewrite phases resolve a URL, so the build asks instead of
+// predicting: the request names the page that the build expects, and the
+// response confirms the cache pathname of the render.
+//
+// The request is a probe. When the URL does not resolve to that page, the
+// handler must not run what does own the URL: a route handler, a Pages Router
+// data function, a metadata route, or a request to another origin.
 
-export function isPrerenderCacheIdentityRequested(requestHeaders: Headers): boolean {
-  return (
-    requestHeaders.get(VINEXT_PRERENDER_CACHE_IDENTITY_HEADER) === PRERENDER_CACHE_IDENTITY_REQUEST
-  );
+/** Mark a build request as a probe that expects the page at `pagePathname`. */
+export function applyRewriteSourceProbeHeader(headers: Headers, pagePathname: string): void {
+  // A pathname can hold characters that a header value cannot.
+  headers.set(VINEXT_PRERENDER_CACHE_IDENTITY_HEADER, encodeURIComponent(pagePathname));
 }
 
 /**
- * Tell the prerender which cache pathname the request handler gave a rewritten
- * page render. Only the handler knows how redirects, middleware and the rewrite
- * phases resolve a URL, so the build asks instead of predicting.
+ * The page pathname that a rewrite source probe expects, or null for any other
+ * request. Only the prerender server reads the header. A value that the
+ * prerender did not write does not make a request a probe.
  */
+export function readRewriteSourceProbe(requestHeaders: Headers): string | null {
+  if (typeof process === "undefined" || process.env?.VINEXT_PRERENDER !== "1") return null;
+  const raw = requestHeaders.get(VINEXT_PRERENDER_CACHE_IDENTITY_HEADER);
+  if (raw === null) return null;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return null;
+  }
+}
+
+/** Whether a probe that expects `expectedPagePathname` resolved to that page. */
+export function isRewriteSourceProbePage(
+  expectedPagePathname: string,
+  resolvedPathname: string,
+): boolean {
+  return pageIdentityPathname(resolvedPathname) === pageIdentityPathname(expectedPagePathname);
+}
+
+/** The answer to a probe whose URL does not resolve to the page that it expects. */
+export function refusedRewriteSourceProbe(): Response {
+  return new Response(null, { status: 404, headers: { "Cache-Control": "no-store" } });
+}
+
+/** Confirm to the prerender the cache pathname of the render of a probe. */
 export function applyPrerenderCacheIdentityHeader(headers: Headers, cachePathname: string): void {
   // A pathname can hold characters that a header value cannot.
   headers.set(VINEXT_PRERENDER_CACHE_IDENTITY_HEADER, encodeURIComponent(cachePathname));

@@ -26,8 +26,8 @@ import type { ResolvedNextConfig } from "../config/next-config.js";
 import { buildPregeneratedConcretePathTable } from "../server/prerender-manifest.js";
 import { normalizeTrailingSlashPathname } from "../server/request-pipeline.js";
 import {
+  applyRewriteSourceProbeHeader,
   isRewriteCachePathnameOf,
-  PRERENDER_CACHE_IDENTITY_REQUEST,
   readPrerenderCacheIdentityHeader,
 } from "../server/app-rewrite-cache-identity.js";
 import { BLOCKED_PAGES } from "vinext/shims/constants";
@@ -50,7 +50,6 @@ import {
   NEXT_CACHE_TAGS_HEADER,
   VINEXT_CACHE_HEADER,
   VINEXT_METADATA_ROUTE_CACHE_HEADER,
-  VINEXT_PRERENDER_CACHE_IDENTITY_HEADER,
   VINEXT_PRERENDER_CACHE_LIFE_HEADER,
   VINEXT_PRERENDER_REWRITTEN_HEADER,
   VINEXT_PRERENDER_METADATA_ROUTES_PATH,
@@ -1991,11 +1990,11 @@ export async function prerenderApp({
         if (isSpeculative) {
           htmlHeaders.set(VINEXT_PRERENDER_SPECULATIVE_HEADER, "1");
         }
-        // Ask the handler to confirm how it resolved this source URL. Only this
-        // request gets the confirmation header, so no other prerender response
-        // changes.
+        // Ask the handler whether a rewrite resolves this source URL to the
+        // page. The handler renders that page only, and refuses the request
+        // before it runs anything else that owns the URL.
         if (rewriteSourcePath !== undefined) {
-          htmlHeaders.set(VINEXT_PRERENDER_CACHE_IDENTITY_HEADER, PRERENDER_CACHE_IDENTITY_REQUEST);
+          applyRewriteSourceProbeHeader(htmlHeaders, urlPath);
         }
         // Match Next.js's export worker: when trailingSlash is enabled, render
         // the canonical slash form instead of letting the request pipeline
@@ -2097,8 +2096,8 @@ export async function prerenderApp({
 
         // Only the request handler knows how the source URL resolved. Keep the
         // render only when the handler confirms that it rewrote this request
-        // to this page: a route that owns the URL, middleware, or an earlier
-        // rule gives another identity or none.
+        // to this page. The confirmed value is also the key to store: it has
+        // the spelling that a runtime request for this URL reads.
         let rewrite: { source: string; cachePathname: string } | undefined;
         if (rewriteSourcePath !== undefined) {
           const cachePathname = htmlRender.cachePathname;

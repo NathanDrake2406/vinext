@@ -6,14 +6,15 @@ type RewriteSourceConfig = Pick<ResolvedNextConfig, "basePath" | "i18n" | "rewri
 type RouteOwner = Pick<AppRoute, "pattern" | "isDynamic">;
 
 /**
- * Public pathnames that a next.config rewrite resolves to the page at
- * `pagePathname`, as far as the config alone can tell.
+ * Public pathnames that a next.config rewrite can resolve to the page at
+ * `pagePathname`. The prerender asks the request handler about each of them.
  *
- * The prerender requests each of these pathnames, and a request runs what owns
- * the pathname. That owner must be the page: a route handler, a Pages Router
- * data function, or another origin must not get a request that the prerender
- * did not send before. A pathname is therefore left out whenever the config
- * does not prove that the rule takes it:
+ * This list is a set of candidates, not a routing decision. Only the request
+ * handler knows how a URL resolves. It renders a candidate only when a rewrite
+ * resolves it to the page, and refuses it before any other owner of the URL
+ * runs (see `readRewriteSourceProbe`). A wrong candidate costs one refused
+ * request. The rules below leave out the candidates that the config shows the
+ * handler would refuse or would never read at runtime:
  *
  * - A rule with `has` / `missing` is not inverted, and an earlier rule whose
  *   source matches the pathname can take the request, with or without
@@ -23,10 +24,6 @@ type RouteOwner = Pick<AppRoute, "pattern" | "isDynamic">;
  * - A `fallback` rule runs after dynamic routes. This module cannot tell which
  *   pathnames they match, so `fallback` rules give no pathnames.
  * - With `i18n`, a pathname has locale forms that this module does not model.
- *
- * Redirects and middleware are not modeled. They run for a prerendered page
- * URL too, and the request handler has the last word: the prerender keeps a
- * render only when the handler confirms that it resolved to the page.
  */
 export function collectRewriteSourcePathnames(
   pagePathname: string,

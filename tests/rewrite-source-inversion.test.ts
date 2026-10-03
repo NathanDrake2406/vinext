@@ -10,8 +10,11 @@ import {
 import type { NextRewrite } from "../packages/vinext/src/config/next-config.js";
 import {
   applyPrerenderCacheIdentityHeader,
+  applyRewriteSourceProbeHeader,
   isRewriteCachePathnameOf,
+  isRewriteSourceProbePage,
   readPrerenderCacheIdentityHeader,
+  readRewriteSourceProbe,
 } from "../packages/vinext/src/server/app-rewrite-cache-identity.js";
 import {
   getOutputPath,
@@ -350,6 +353,40 @@ describe("prerender cache identity header", () => {
     const cachePathname = "/blog/café?__vinext_rewrite=%2Fen%2Fblog%2Fcaf%25C3%25A9";
     applyPrerenderCacheIdentityHeader(headers, cachePathname);
     expect(readPrerenderCacheIdentityHeader(headers)).toBe(cachePathname);
+  });
+});
+
+describe("rewrite source probe header", () => {
+  const probeHeaders = (pagePathname: string) => {
+    const headers = new Headers();
+    applyRewriteSourceProbeHeader(headers, pagePathname);
+    return headers;
+  };
+
+  it("carries the expected page pathname only to the prerender server", () => {
+    const headers = probeHeaders("/en/blog/café");
+    try {
+      // A production server gets the same header from any client.
+      expect(readRewriteSourceProbe(headers)).toBeNull();
+      vi.stubEnv("VINEXT_PRERENDER", "1");
+      expect(readRewriteSourceProbe(headers)).toBe("/en/blog/café");
+      expect(readRewriteSourceProbe(new Headers())).toBeNull();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.each<[string, string, boolean]>([
+    ["/en/about", "/en/about", true],
+    // The handler keeps the trailing slash of a rewrite destination and the
+    // percent-encoding of the request.
+    ["/en/about", "/en/about/", true],
+    ["/en/blog/café", "/en/blog/caf%C3%A9", true],
+    ["/en/about", "/en/contact", false],
+    ["/en/about", "/en/about/team", false],
+    ["/en/about", "/EN/about", false],
+  ])("expects %s and meets %s: %s", (expectedPagePathname, resolvedPathname, isPage) => {
+    expect(isRewriteSourceProbePage(expectedPagePathname, resolvedPathname)).toBe(isPage);
   });
 });
 

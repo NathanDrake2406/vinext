@@ -30,12 +30,11 @@ import {
   VINEXT_INTERCEPTION_ID_HEADER,
   VINEXT_MW_CTX_HEADER,
   VINEXT_PARAMS_HEADER,
-  VINEXT_PRERENDER_CACHE_IDENTITY_HEADER,
   VINEXT_RENDERED_PATH_AND_SEARCH_HEADER,
 } from "../packages/vinext/src/server/headers.js";
 import { applyAppMiddleware } from "../packages/vinext/src/server/app-middleware.js";
 import {
-  PRERENDER_CACHE_IDENTITY_REQUEST,
+  applyRewriteSourceProbeHeader,
   readPrerenderCacheIdentityHeader,
 } from "../packages/vinext/src/server/app-rewrite-cache-identity.js";
 import type { NextRequest } from "../packages/vinext/src/shims/server.js";
@@ -2698,39 +2697,150 @@ describe("createAppRscHandler", () => {
     expect(response.headers.get("Cache-Control")).toBe("public, s-maxage=3600");
   });
 
-  it("confirms the cache identity of a rewritten page render only when the prerender asks", async () => {
-    const route = createPageRoute();
-    const matchAbout = (pathname: string) => (pathname === "/about" ? { params: {}, route } : null);
-    const handler = createHandler({
-      configHeaders: [],
-      configRewrites: {
-        beforeFiles: [{ source: "/alias", destination: "/about" }],
-        afterFiles: [],
-        fallback: [],
-      },
-      matchRequestRoute: matchAbout,
-      matchRoute: matchAbout,
-    });
-    const identity = async (pathname: string, headers: Record<string, string> = {}) =>
-      readPrerenderCacheIdentityHeader(
-        (await handler(new Request(`https://example.test/docs${pathname}`, { headers }), null))
-          .headers,
-      );
-    const asked = { [VINEXT_PRERENDER_CACHE_IDENTITY_HEADER]: PRERENDER_CACHE_IDENTITY_REQUEST };
-
-    try {
-      // A runtime response does not carry the build side channel.
-      expect(await identity("/alias", asked)).toBeNull();
-      vi.stubEnv("VINEXT_PRERENDER", "1");
-      expect(await identity("/alias", asked)).toBe("/alias?__vinext_rewrite=%2Fabout");
-      // The header grows with the pathname. A prerender response that the
-      // build did not ask about must stay as it was before.
-      expect(await identity("/alias")).toBeNull();
-      // The identity of an unrewritten request is its own URL.
-      expect(await identity("/about", asked)).toBeNull();
-    } finally {
+  describe("a rewrite source probe of the prerender", () => {
+    afterEach(() => {
       vi.unstubAllEnvs();
+      vi.unstubAllGlobals();
+    });
+
+    const probeFor = (pagePathname: string) => {
+      const headers = new Headers();
+      applyRewriteSourceProbeHeader(headers, pagePathname);
+      return headers;
+    };
+
+    // Each thing that can answer a URL records its call and answers with its
+    // own name.
+    function createProbeTarget() {
+      const ownerCalls: string[] = [];
+      const answer = (owner: string, status = 200) => {
+        ownerCalls.push(owner);
+        return new Response(owner, { status });
+      };
+      const routes = new Map<string, TestRoute>([
+        ["/about", createPageRoute()],
+        ["/contact", createPageRoute({ pattern: "/contact", routeSegments: ["contact"] })],
+        [
+          "/hook",
+          createPageRoute({
+            __loadPage: undefined,
+            __loadRouteHandler() {},
+            page: null,
+            pattern: "/hook",
+            routeHandler: { GET: () => new Response("get") },
+            routeSegments: ["hook"],
+          }),
+        ],
+      ]);
+      const matchRoute = (pathname: string) => {
+        const route = routes.get(pathname);
+        return route ? { params: {}, route } : null;
+      };
+      vi.stubGlobal("fetch", async () => answer("other origin"));
+      const handler = createHandler({
+        configHeaders: [],
+        configRewrites: {
+          beforeFiles: [],
+          afterFiles: [
+            { source: "/alias", destination: "/about" },
+            { source: "/to-other-page", destination: "/contact" },
+            { source: "/to-route-handler", destination: "/hook" },
+            { source: "/to-other-origin", destination: "https://upstream.example/landing" },
+          ],
+          fallback: [],
+        },
+        dispatchMatchedPage: async ({ cleanPathname }) => answer(`page ${cleanPathname}`),
+        dispatchMatchedRouteHandler: async () => answer("route handler"),
+        ensureRouteLoaded: (route) => {
+          ownerCalls.push(`module ${route.pattern}`);
+        },
+        handleMetadataRouteRequest: async (cleanPathname) => {
+          const response = answer("metadata route");
+          return cleanPathname === "/robots.txt" ? response : null;
+        },
+        matchRequestRoute: matchRoute,
+        matchRoute,
+        middlewareModule: {
+          default(request: NextRequest) {
+            return new Response(null, {
+              headers:
+                request.nextUrl.pathname === "/middleware-to-other-origin"
+                  ? { "x-middleware-rewrite": "https://upstream.example/landing" }
+                  : { "x-middleware-next": "1" },
+            });
+          },
+        },
+        renderNotFound: async () => answer("not-found page", 404),
+        renderPagesFallback: async ({ pathname }) => {
+          const response = answer("Pages Router");
+          return pathname === "/feed" ? response : null;
+        },
+      });
+      const request = (pathname: string, headers?: Headers) =>
+        handler(new Request(`https://example.test/docs${pathname}`, { headers }), null);
+      return { ownerCalls, request };
     }
+
+    it("renders the page that it expects and confirms the cache pathname", async () => {
+      const { ownerCalls, request } = createProbeTarget();
+      vi.stubEnv("VINEXT_PRERENDER", "1");
+
+      const response = await request("/alias", probeFor("/about"));
+
+      expect(await response.text()).toBe("page /about");
+      expect(readPrerenderCacheIdentityHeader(response.headers)).toBe(
+        "/alias?__vinext_rewrite=%2Fabout",
+      );
+      expect(ownerCalls).toEqual(["module /about", "page /about"]);
+    });
+
+    it.each([
+      ["/about", "page /about", "the request is not rewritten"],
+      ["/to-other-page", "page /contact", "a rewrite resolves it to another page"],
+      ["/to-route-handler", "route handler", "a rewrite resolves it to a route handler"],
+      ["/hook", "route handler", "a route handler owns it"],
+      ["/to-other-origin", "other origin", "a config rewrite sends it to another origin"],
+      ["/middleware-to-other-origin", "other origin", "middleware sends it to another origin"],
+      ["/robots.txt", "metadata route", "a metadata route owns it"],
+      ["/feed", "Pages Router", "a Pages Router route owns it"],
+      ["/missing", "not-found page", "nothing owns it"],
+    ])("refuses %s and does not run %j, because %s", async (pathname, owner) => {
+      const { ownerCalls, request } = createProbeTarget();
+      vi.stubEnv("VINEXT_PRERENDER", "1");
+
+      // An ordinary request for the URL reaches the owner.
+      expect(await (await request(pathname)).text()).toBe(owner);
+      ownerCalls.length = 0;
+
+      const refused = await request(pathname, probeFor("/about"));
+
+      expect(refused.status).toBe(404);
+      expect(refused.headers.get("Cache-Control")).toBe("no-store");
+      expect(await refused.text()).toBe("");
+      expect(readPrerenderCacheIdentityHeader(refused.headers)).toBeNull();
+      expect(ownerCalls).toEqual([]);
+    });
+
+    it("is an ordinary request outside the prerender", async () => {
+      const { request } = createProbeTarget();
+
+      expect(await (await request("/to-route-handler", probeFor("/about"))).text()).toBe(
+        "route handler",
+      );
+      const page = await request("/alias", probeFor("/about"));
+      expect(await page.text()).toBe("page /about");
+      expect(readPrerenderCacheIdentityHeader(page.headers)).toBeNull();
+    });
+
+    it("does not change a prerender response that is not a probe", async () => {
+      const { request } = createProbeTarget();
+      vi.stubEnv("VINEXT_PRERENDER", "1");
+
+      const page = await request("/alias");
+
+      expect(await page.text()).toBe("page /about");
+      expect(readPrerenderCacheIdentityHeader(page.headers)).toBeNull();
+    });
   });
 
   it.each([
