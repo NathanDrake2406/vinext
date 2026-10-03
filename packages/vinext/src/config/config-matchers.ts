@@ -175,7 +175,8 @@ function getCachedRegex<K, V>(cache: Map<K, V | null>, key: K, compile: () => V 
  *     of the pathname, so it could never find a key that ends in one.
  *     `matchConfigPattern` matches such a source against `/en/old/`.
  */
-const _LOCALE_STATIC_RE = /^\/:\w+\(([\w|-]+)\)(\??)\/([a-zA-Z0-9_~.%@!$&',;=/-]+)(?<!\/)$/;
+const _LOCALE_STATIC_RE =
+  /^\/:\w+\(([\w|-]+)\)(\??)\/([a-zA-Z0-9_~.%@!$&',;=/-]*[a-zA-Z0-9_~.%@!$&',;=-])$/;
 
 type LocaleStaticEntry = {
   /** The param name extracted from the source (e.g. "locale"). */

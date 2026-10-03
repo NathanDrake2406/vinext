@@ -13702,6 +13702,8 @@ describe("matchRedirect locale-static index", () => {
     ];
     expect(matchRedirect("/en//security", redirects, emptyCtx)?.destination).toBe("/target");
     expect(matchRedirect("//en/security/", redirects, emptyCtx)?.destination).toBe("/target");
+    // The slashes are collapsed before the one trailing slash is removed.
+    expect(matchRedirect("/en/security//", redirects, emptyCtx)?.destination).toBe("/target");
   });
 
   it("requires the locale segment when the source does not make it optional", async () => {
@@ -15365,6 +15367,14 @@ describe("open redirect prevention in catch-all redirects", () => {
     const result = matchRedirect("/go/page", redirects, emptyCtx);
     expect(result).not.toBeNull();
     expect(result!.destination).toBe("https://example.com/page");
+  });
+
+  it("matchRewrite sanitizes a capture that starts with a slash", async () => {
+    const { matchRewrite } = await import("../packages/vinext/src/config/config-matchers.js");
+    // `path` is `/evil.com`, so the substituted destination is `//evil.com`
+    // before the sanitizer runs.
+    const rewrites = [{ source: "/old:path(.*)", destination: "/:path" }];
+    expect(matchRewrite("/old//evil.com", rewrites, emptyCtx)).toBe("/evil.com");
   });
 
   it("matchRewrite sanitizes decoded %2F that would produce //evil.com", async () => {
