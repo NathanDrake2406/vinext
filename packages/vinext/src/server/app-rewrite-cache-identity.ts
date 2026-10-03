@@ -65,34 +65,60 @@ export function isRewriteCachePathnameOf(
 // handler must not run what does own the URL: a route handler, a Pages Router
 // data function, a metadata route, or a request to another origin.
 
-/** Mark a build request as a probe that expects the page at `pagePathname`. */
-export function applyRewriteSourceProbeHeader(headers: Headers, pagePathname: string): void {
+/** The page that a rewrite source probe expects a rewrite to resolve its URL to. */
+export type RewriteSourceProbe = {
+  /** Pattern of the App route that the prerender renders the page from. */
+  routePattern: string;
+  /** Pathname of the prerendered page. */
+  pagePathname: string;
+};
+
+/** Mark a build request as a probe that expects `probe`. */
+export function applyRewriteSourceProbeHeader(headers: Headers, probe: RewriteSourceProbe): void {
   // A pathname can hold characters that a header value cannot.
-  headers.set(VINEXT_PRERENDER_CACHE_IDENTITY_HEADER, encodeURIComponent(pagePathname));
+  headers.set(
+    VINEXT_PRERENDER_CACHE_IDENTITY_HEADER,
+    encodeURIComponent(JSON.stringify([probe.routePattern, probe.pagePathname])),
+  );
 }
 
 /**
- * The page pathname that a rewrite source probe expects, or null for any other
- * request. Only the prerender server reads the header. A value that the
- * prerender did not write does not make a request a probe.
+ * The page that a rewrite source probe expects, or null for any other request.
+ * Only the prerender server reads the header. A value that the prerender did
+ * not write does not make a request a probe.
  */
-export function readRewriteSourceProbe(requestHeaders: Headers): string | null {
+export function readRewriteSourceProbe(requestHeaders: Headers): RewriteSourceProbe | null {
   if (typeof process === "undefined" || process.env?.VINEXT_PRERENDER !== "1") return null;
   const raw = requestHeaders.get(VINEXT_PRERENDER_CACHE_IDENTITY_HEADER);
   if (raw === null) return null;
+  let value: unknown;
   try {
-    return decodeURIComponent(raw);
+    value = JSON.parse(decodeURIComponent(raw));
   } catch {
     return null;
   }
+  if (!Array.isArray(value) || value.length !== 2) return null;
+  const [routePattern, pagePathname]: unknown[] = value;
+  if (typeof routePattern !== "string" || typeof pagePathname !== "string") return null;
+  return { routePattern, pagePathname };
 }
 
-/** Whether a probe that expects `expectedPagePathname` resolved to that page. */
+/**
+ * Whether a probe resolved to the page that it expects.
+ *
+ * The pathname alone does not name the page. The route that the handler
+ * matches for a rewritten pathname can be another route than the one that the
+ * prerender renders the page from, for example a route handler.
+ */
 export function isRewriteSourceProbePage(
-  expectedPagePathname: string,
+  probe: RewriteSourceProbe,
+  matchedRoutePattern: string,
   resolvedPathname: string,
 ): boolean {
-  return pageIdentityPathname(resolvedPathname) === pageIdentityPathname(expectedPagePathname);
+  return (
+    matchedRoutePattern === probe.routePattern &&
+    pageIdentityPathname(resolvedPathname) === pageIdentityPathname(probe.pagePathname)
+  );
 }
 
 /** The answer to a probe whose URL does not resolve to the page that it expects. */

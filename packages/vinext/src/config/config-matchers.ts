@@ -19,7 +19,6 @@ import {
   PRERENDER_REVALIDATE_HEADER,
   PRERENDER_REVALIDATE_ONLY_GENERATED_HEADER,
   VINEXT_MW_CTX_HEADER,
-  VINEXT_PRERENDER_CACHE_IDENTITY_HEADER,
   VINEXT_PRERENDER_ROUTE_PARAMS_HEADER,
   VINEXT_PRERENDER_SECRET_HEADER,
   VINEXT_REVALIDATE_HOST_HEADER,
@@ -1445,7 +1444,6 @@ export async function proxyExternalRequest(
   // used only by vinext's own prerender pipeline.
   headers.delete(VINEXT_PRERENDER_SECRET_HEADER);
   headers.delete(VINEXT_PRERENDER_ROUTE_PARAMS_HEADER);
-  headers.delete(VINEXT_PRERENDER_CACHE_IDENTITY_HEADER);
   // On-demand revalidation is an internal authenticated request. Config and
   // middleware rewrites may legitimately proxy ordinary requests externally,
   // but the credential, its companion control header, and the authenticated
@@ -1501,9 +1499,6 @@ export async function proxyExternalRequest(
   upstreamResponse.headers.forEach((value, key) => {
     const lower = key.toLowerCase();
     if (HOP_BY_HOP_HEADERS.has(lower)) return;
-    // Only this server's request handler can confirm a prerender cache
-    // identity. An upstream origin must not answer for it.
-    if (lower === VINEXT_PRERENDER_CACHE_IDENTITY_HEADER) return;
     if (isNodeRuntime && (lower === "content-encoding" || lower === "content-length")) return;
     responseHeaders.append(key, value);
   });

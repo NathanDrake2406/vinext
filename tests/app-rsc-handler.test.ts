@@ -36,6 +36,7 @@ import { applyAppMiddleware } from "../packages/vinext/src/server/app-middleware
 import {
   applyRewriteSourceProbeHeader,
   readPrerenderCacheIdentityHeader,
+  type RewriteSourceProbe,
 } from "../packages/vinext/src/server/app-rewrite-cache-identity.js";
 import type { NextRequest } from "../packages/vinext/src/shims/server.js";
 import {
@@ -2703,9 +2704,10 @@ describe("createAppRscHandler", () => {
       vi.unstubAllGlobals();
     });
 
-    const probeFor = (pagePathname: string) => {
+    const ABOUT_PAGE: RewriteSourceProbe = { routePattern: "/about", pagePathname: "/about" };
+    const probeFor = (probe: RewriteSourceProbe) => {
       const headers = new Headers();
-      applyRewriteSourceProbeHeader(headers, pagePathname);
+      applyRewriteSourceProbeHeader(headers, probe);
       return headers;
     };
 
@@ -2732,9 +2734,18 @@ describe("createAppRscHandler", () => {
           }),
         ],
       ]);
+      const blogRoute = createPageRoute({
+        isDynamic: true,
+        params: ["slug"],
+        pattern: "/blog/:slug",
+        routeSegments: ["blog", "[slug]"],
+      });
       const matchRoute = (pathname: string) => {
-        const route = routes.get(pathname);
-        return route ? { params: {}, route } : null;
+        const route = pathname.startsWith("/blog/") ? blogRoute : routes.get(pathname);
+        if (!route) return null;
+        const params: Record<string, string> =
+          route === blogRoute ? { slug: pathname.slice("/blog/".length) } : {};
+        return { params, route };
       };
       vi.stubGlobal("fetch", async () => answer("other origin"));
       const handler = createHandler({
@@ -2744,6 +2755,7 @@ describe("createAppRscHandler", () => {
           afterFiles: [
             { source: "/alias", destination: "/about" },
             { source: "/to-other-page", destination: "/contact" },
+            { source: "/to-other-params", destination: "/blog/b" },
             { source: "/to-route-handler", destination: "/hook" },
             { source: "/to-other-origin", destination: "https://upstream.example/landing" },
           ],
@@ -2785,7 +2797,7 @@ describe("createAppRscHandler", () => {
       const { ownerCalls, request } = createProbeTarget();
       vi.stubEnv("VINEXT_PRERENDER", "1");
 
-      const response = await request("/alias", probeFor("/about"));
+      const response = await request("/alias", probeFor(ABOUT_PAGE));
 
       expect(await response.text()).toBe("page /about");
       expect(readPrerenderCacheIdentityHeader(response.headers)).toBe(
@@ -2794,17 +2806,52 @@ describe("createAppRscHandler", () => {
       expect(ownerCalls).toEqual(["module /about", "page /about"]);
     });
 
-    it.each([
-      ["/about", "page /about", "the request is not rewritten"],
-      ["/to-other-page", "page /contact", "a rewrite resolves it to another page"],
-      ["/to-route-handler", "route handler", "a rewrite resolves it to a route handler"],
-      ["/hook", "route handler", "a route handler owns it"],
-      ["/to-other-origin", "other origin", "a config rewrite sends it to another origin"],
-      ["/middleware-to-other-origin", "other origin", "middleware sends it to another origin"],
-      ["/robots.txt", "metadata route", "a metadata route owns it"],
-      ["/feed", "Pages Router", "a Pages Router route owns it"],
-      ["/missing", "not-found page", "nothing owns it"],
-    ])("refuses %s and does not run %j, because %s", async (pathname, owner) => {
+    it.each<[string, string, string, RewriteSourceProbe]>([
+      ["/about", "page /about", "the request is not rewritten", ABOUT_PAGE],
+      ["/to-other-page", "page /contact", "a rewrite resolves it to another page", ABOUT_PAGE],
+      [
+        "/to-other-params",
+        "page /blog/b",
+        "a rewrite resolves it to the route of the page with other params",
+        { routePattern: "/blog/:slug", pagePathname: "/blog/a" },
+      ],
+      // The handler can match another route for the pathname of the page than
+      // the route that the prerender renders the page from.
+      [
+        "/to-other-page",
+        "page /contact",
+        "another page route takes the pathname of the page",
+        { routePattern: "/:slug", pagePathname: "/contact" },
+      ],
+      [
+        "/to-route-handler",
+        "route handler",
+        "a route handler takes the pathname of the page",
+        { routePattern: "/:slug", pagePathname: "/hook" },
+      ],
+      [
+        "/to-route-handler",
+        "route handler",
+        "a rewrite resolves it to a route handler",
+        ABOUT_PAGE,
+      ],
+      ["/hook", "route handler", "a route handler owns it", ABOUT_PAGE],
+      [
+        "/to-other-origin",
+        "other origin",
+        "a config rewrite sends it to another origin",
+        ABOUT_PAGE,
+      ],
+      [
+        "/middleware-to-other-origin",
+        "other origin",
+        "middleware sends it to another origin",
+        ABOUT_PAGE,
+      ],
+      ["/robots.txt", "metadata route", "a metadata route owns it", ABOUT_PAGE],
+      ["/feed", "Pages Router", "a Pages Router route owns it", ABOUT_PAGE],
+      ["/missing", "not-found page", "nothing owns it", ABOUT_PAGE],
+    ])("refuses %s and does not run %j, because %s", async (pathname, owner, _reason, probe) => {
       const { ownerCalls, request } = createProbeTarget();
       vi.stubEnv("VINEXT_PRERENDER", "1");
 
@@ -2812,7 +2859,7 @@ describe("createAppRscHandler", () => {
       expect(await (await request(pathname)).text()).toBe(owner);
       ownerCalls.length = 0;
 
-      const refused = await request(pathname, probeFor("/about"));
+      const refused = await request(pathname, probeFor(probe));
 
       expect(refused.status).toBe(404);
       expect(refused.headers.get("Cache-Control")).toBe("no-store");
@@ -2824,10 +2871,10 @@ describe("createAppRscHandler", () => {
     it("is an ordinary request outside the prerender", async () => {
       const { request } = createProbeTarget();
 
-      expect(await (await request("/to-route-handler", probeFor("/about"))).text()).toBe(
+      expect(await (await request("/to-route-handler", probeFor(ABOUT_PAGE))).text()).toBe(
         "route handler",
       );
-      const page = await request("/alias", probeFor("/about"));
+      const page = await request("/alias", probeFor(ABOUT_PAGE));
       expect(await page.text()).toBe("page /about");
       expect(readPrerenderCacheIdentityHeader(page.headers)).toBeNull();
     });

@@ -1994,7 +1994,7 @@ export async function prerenderApp({
         // page. The handler renders that page only, and refuses the request
         // before it runs anything else that owns the URL.
         if (rewriteSourcePath !== undefined) {
-          applyRewriteSourceProbeHeader(htmlHeaders, urlPath);
+          applyRewriteSourceProbeHeader(htmlHeaders, { routePattern, pagePathname: urlPath });
         }
         // Match Next.js's export worker: when trailingSlash is enabled, render
         // the canonical slash form instead of letting the request pipeline

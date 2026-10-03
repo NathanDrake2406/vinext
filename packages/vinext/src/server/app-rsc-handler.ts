@@ -2328,7 +2328,8 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   // resolved the URL to the page that the prerender expects.
   if (
     rewriteSourceProbe !== null &&
-    (cleanPathnameIsRequestPathname || !isRewriteSourceProbePage(rewriteSourceProbe, cleanPathname))
+    (cleanPathnameIsRequestPathname ||
+      !isRewriteSourceProbePage(rewriteSourceProbe, route.pattern, cleanPathname))
   ) {
     options.clearRequestContext();
     return refusedRewriteSourceProbe();

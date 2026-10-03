@@ -467,17 +467,40 @@ describe("a rewrite source URL that the request handler resolves to another owne
   beforeAll(async () => {
     callLog = createCallLog();
     ({ root, routes } = await buildFixture(
-      // A request has the percent-encoded spelling of this source, which the
-      // rule does not match. The config alone does not show that.
+      // The config alone does not show the owner of these source URLs:
+      // - A request has the percent-encoded spelling of the first source, which
+      //   the rule does not match. A dynamic route handler takes the request.
+      // - The second rule resolves `/über-uns` to the pathname of a
+      //   prerendered page, but the handler matches a route handler for it.
       `export default {
   async rewrites() {
-    return { afterFiles: [{ source: "/shop/über-uns", destination: "/about" }] };
+    return {
+      afterFiles: [
+        { source: "/shop/über-uns", destination: "/about" },
+        { source: "/:path((?!en$|en/|shop/|about$|_next/).*)", destination: "/en/:path" },
+      ],
+    };
   },
 };
 `,
       {
         "app/about/page.tsx": `export default function Page() {
   return <p>about</p>;
+}
+`,
+        "app/[locale]/[slug]/page.tsx": `export function generateStaticParams() {
+  return [{ locale: "en", slug: "über-uns" }];
+}
+
+export default async function Page({ params }: { params: Promise<{ slug: string }> }) {
+  return <p>{(await params).slug}</p>;
+}
+`,
+        "app/[locale]/über-uns/route.ts": `import fs from "node:fs";
+
+export async function GET() {
+  fs.appendFileSync(process.env.VINEXT_TEST_CALL_LOG, "GET /[locale]/über-uns\\n");
+  return new Response("locale route handler");
 }
 `,
         "app/shop/[item]/route.ts": `import fs from "node:fs";

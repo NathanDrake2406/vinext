@@ -357,36 +357,52 @@ describe("prerender cache identity header", () => {
 });
 
 describe("rewrite source probe header", () => {
-  const probeHeaders = (pagePathname: string) => {
+  const blogPage = { routePattern: "/:locale/blog/:slug", pagePathname: "/en/blog/café" };
+  const probeHeaders = () => {
     const headers = new Headers();
-    applyRewriteSourceProbeHeader(headers, pagePathname);
+    applyRewriteSourceProbeHeader(headers, blogPage);
     return headers;
   };
 
-  it("carries the expected page pathname only to the prerender server", () => {
-    const headers = probeHeaders("/en/blog/café");
+  it("carries the expected page only to the prerender server", () => {
     try {
       // A production server gets the same header from any client.
-      expect(readRewriteSourceProbe(headers)).toBeNull();
+      expect(readRewriteSourceProbe(probeHeaders())).toBeNull();
       vi.stubEnv("VINEXT_PRERENDER", "1");
-      expect(readRewriteSourceProbe(headers)).toBe("/en/blog/café");
+      expect(readRewriteSourceProbe(probeHeaders())).toEqual(blogPage);
       expect(readRewriteSourceProbe(new Headers())).toBeNull();
     } finally {
       vi.unstubAllEnvs();
     }
   });
 
+  it.each(["%E0%A4%A", "1", "%5B%22%2Fabout%22%5D", "%5B1%2C2%5D"])(
+    "does not make a probe of a request with the header value %s",
+    (value) => {
+      vi.stubEnv("VINEXT_PRERENDER", "1");
+      try {
+        const headers = probeHeaders();
+        for (const name of headers.keys()) headers.set(name, value);
+        expect(readRewriteSourceProbe(headers)).toBeNull();
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
   it.each<[string, string, boolean]>([
-    ["/en/about", "/en/about", true],
+    ["/:locale/blog/:slug", "/en/blog/café", true],
     // The handler keeps the trailing slash of a rewrite destination and the
     // percent-encoding of the request.
-    ["/en/about", "/en/about/", true],
-    ["/en/blog/café", "/en/blog/caf%C3%A9", true],
-    ["/en/about", "/en/contact", false],
-    ["/en/about", "/en/about/team", false],
-    ["/en/about", "/EN/about", false],
-  ])("expects %s and meets %s: %s", (expectedPagePathname, resolvedPathname, isPage) => {
-    expect(isRewriteSourceProbePage(expectedPagePathname, resolvedPathname)).toBe(isPage);
+    ["/:locale/blog/:slug", "/en/blog/café/", true],
+    ["/:locale/blog/:slug", "/en/blog/caf%C3%A9", true],
+    ["/:locale/blog/:slug", "/en/blog/tea", false],
+    ["/:locale/blog/:slug", "/EN/blog/café", false],
+    // Another route can match the pathname of the page.
+    ["/:locale/blog/café", "/en/blog/café", false],
+    ["/en/:section/:slug", "/en/blog/café", false],
+  ])("meets the route %s at %s: %s", (matchedRoutePattern, resolvedPathname, isPage) => {
+    expect(isRewriteSourceProbePage(blogPage, matchedRoutePattern, resolvedPathname)).toBe(isPage);
   });
 });
 
