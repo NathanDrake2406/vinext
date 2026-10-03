@@ -13665,6 +13665,13 @@ describe("matchRedirect locale-static index", () => {
       { source: "/:locale(en|fr)/files/(.*)", destination: "/target", permanent: false },
     ];
     expect(matchRedirect("/en/files/a.pdf", redirects, emptyCtx)?.destination).toBe("/target");
+
+    // An escape is source syntax too: `\.` is the literal `.`, so the text of
+    // the suffix is not the text of the pathname.
+    const escaped = [
+      { source: "/:locale(en|fr)/file\\.txt", destination: "/target", permanent: false },
+    ];
+    expect(matchRedirect("/en/file.txt", escaped, emptyCtx)?.destination).toBe("/target");
   });
 
   it("applies an indexed rule to a pathname with repeated slashes", async () => {
@@ -13794,6 +13801,9 @@ describe("matchConfigPattern matches redirect and rewrite sources like Next.js",
     expect(matchConfigPattern("//admin///x", "/admin/:id")).toEqual({ id: "x" });
     expect(matchConfigPattern("/about//", "/about")).toEqual({});
     expect(matchConfigPattern("/admin//secret", "/admin/:id")).toEqual({ id: "secret" });
+    // The slashes are collapsed before the one trailing slash is removed, so
+    // a `(.*)` capture does not keep a slash from the end of the pathname.
+    expect(matchConfigPattern("/a/b//", "/a/:p(.*)")).toEqual({ p: "b" });
   });
 
   // The slash of the root path is not removed before the match. The optional
