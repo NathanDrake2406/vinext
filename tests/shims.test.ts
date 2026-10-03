@@ -13927,6 +13927,8 @@ describe("client source shortcut agrees with matchConfigPattern", () => {
       // A doubled slash in the source, in front of an optional catch-all.
       ["/a//:x*", "/a//"],
       ["/a//:x*", "/a"],
+      // The `.` before an optional param is optional with it.
+      ["/a.:x?", "/a"],
     ];
 
     const wrongAnswers: string[] = [];
