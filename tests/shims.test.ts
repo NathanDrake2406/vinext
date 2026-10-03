@@ -13313,11 +13313,13 @@ describe("escapeHeaderSource", () => {
 describe("matchConfigPattern rejects ReDoS patterns", () => {
   it("returns null for pathological source patterns", async () => {
     const { matchConfigPattern } = await import("../packages/vinext/src/config/config-matchers.js");
-    // This pattern has nested quantifiers: the compiled regex would be (a+)+b
+    // This pattern has nested quantifiers: the compiled regex would be (?:a+)+b
     // which causes catastrophic backtracking. matchConfigPattern should return
-    // null (no match) rather than hanging.
-    // lgtm[js/redos] — deliberate pathological regex to test safeRegExp guard
-    const result = matchConfigPattern("/aaaaaaaaaaaaaaaaaaaac", "/:id((a+)+b)");
+    // null (no match) rather than hanging. The inner group is non-capturing
+    // because path-to-regexp rejects a capturing group inside a constraint
+    // before the safety scan runs.
+    // lgtm[js/redos] — deliberate pathological regex to test the safety guard
+    const result = matchConfigPattern("/aaaaaaaaaaaaaaaaaaaac", "/:id((?:a+)+b)");
     expect(result).toBeNull();
   });
 });
@@ -13360,9 +13362,9 @@ describe("matchConfigPattern compiled pattern cache", () => {
   it("caches rejection for unsafe (ReDoS) patterns and returns null on repeat calls", async () => {
     const { matchConfigPattern } = await import("../packages/vinext/src/config/config-matchers.js");
     // lgtm[js/redos] — deliberate pathological regex to test cache-of-null path
-    const unsafe = "/:id((a+)+b)";
+    const unsafe = "/:id((?:a+)+b)";
     expect(matchConfigPattern("/x", unsafe)).toBeNull();
-    // Second call must not re-run isSafeRegex — just return null from cache.
+    // Second call must not re-run the safety scan — just return null from cache.
     expect(matchConfigPattern("/x", unsafe)).toBeNull();
   });
 });
@@ -13554,6 +13556,44 @@ describe("matchRedirect locale-static index", () => {
     expect(result!.destination).toBe("/other-dest");
     expect(result!.permanent).toBe(true);
   });
+
+  // The index compares the suffix as literal text. A suffix with a catch-all
+  // was once indexed under the key "/old/:path*" and so could never match.
+  it("matches a locale rule whose suffix has a catch-all", async () => {
+    const { matchRedirect } = await import("../packages/vinext/src/config/config-matchers.js");
+    const redirects = [
+      { source: "/:locale(en|fr)/old/:path*", destination: "/new/:locale", permanent: false },
+    ];
+    expect(matchRedirect("/en/old/x/y", redirects, emptyCtx)?.destination).toBe("/new/en");
+    expect(matchRedirect("/fr/old", redirects, emptyCtx)?.destination).toBe("/new/fr");
+    expect(matchRedirect("/de/old/x", redirects, emptyCtx)).toBeNull();
+  });
+
+  it("keeps first-match order between a locale catch-all rule and a locale-static rule", async () => {
+    const { matchRedirect } = await import("../packages/vinext/src/config/config-matchers.js");
+    const staticRule = {
+      source: "/:locale(en|fr)/old/page",
+      destination: "/static",
+      permanent: false,
+    };
+    const catchAllRule = {
+      source: "/:locale(en|fr)/old/:path*",
+      destination: "/catch-all",
+      permanent: false,
+    };
+    const staticFirst = [staticRule, catchAllRule];
+    expect(matchRedirect("/en/old/page", staticFirst, emptyCtx)?.destination).toBe("/static");
+    expect(matchRedirect("/en/old/other", staticFirst, emptyCtx)?.destination).toBe("/catch-all");
+    const catchAllFirst = [catchAllRule, staticRule];
+    expect(matchRedirect("/en/old/page", catchAllFirst, emptyCtx)?.destination).toBe("/catch-all");
+  });
+
+  it("matches a locale constraint that spans more than one segment", async () => {
+    const { matchRedirect } = await import("../packages/vinext/src/config/config-matchers.js");
+    const redirects = [{ source: "/:prefix(.*)/foo", destination: "/target", permanent: false }];
+    expect(matchRedirect("/a/b/foo", redirects, emptyCtx)?.destination).toBe("/target");
+    expect(matchRedirect("/a/b/bar", redirects, emptyCtx)).toBeNull();
+  });
 });
 
 describe("matchConfigPattern handles parameterized suffix patterns", () => {
@@ -13586,6 +13626,102 @@ describe("matchConfigPattern handles parameterized suffix patterns", () => {
     expect(matchConfigPattern("/docs/guide/getting-started", "/docs/:path*")).toEqual({
       path: "guide/getting-started",
     });
+  });
+});
+
+describe("matchConfigPattern matches redirect and rewrite sources like Next.js", () => {
+  it("reads an unnamed group as regex syntax", async () => {
+    const { matchConfigPattern } = await import("../packages/vinext/src/config/config-matchers.js");
+    expect(matchConfigPattern("/legacy-x", "/legacy-(.*)")).toEqual({});
+    expect(matchConfigPattern("/files/a.pdf", "/files/(.*)")).toEqual({});
+    expect(matchConfigPattern("/docs/a", "/((?!embed/).*)")).toEqual({});
+    expect(matchConfigPattern("/embed/x", "/((?!embed/).*)")).toBeNull();
+  });
+
+  it("does not return an unnamed group as a param, and keeps later params aligned", async () => {
+    const { matchConfigPattern } = await import("../packages/vinext/src/config/config-matchers.js");
+    expect(
+      matchConfigPattern("/unnamed-params/nested/a/b/c", "/unnamed-params/nested/(.*)/:test/(.*)"),
+    ).toEqual({ test: "b" });
+  });
+
+  it("makes the slash before an optional or catch-all param optional with it", async () => {
+    const { matchConfigPattern } = await import("../packages/vinext/src/config/config-matchers.js");
+    expect(matchConfigPattern("/shop", "/shop/:id?")).toEqual({ id: "" });
+    expect(matchConfigPattern("/shop/1", "/shop/:id?")).toEqual({ id: "1" });
+    expect(matchConfigPattern("/en", "/:locale(en|fr)/:path*")).toEqual({ locale: "en", path: "" });
+    expect(matchConfigPattern("/a/b", "/a/:b/:c*")).toEqual({ b: "b", c: "" });
+    expect(matchConfigPattern("/about", "/:locale?/about")).toEqual({ locale: "" });
+  });
+
+  it("requires a non-empty segment for a param", async () => {
+    const { matchConfigPattern } = await import("../packages/vinext/src/config/config-matchers.js");
+    expect(matchConfigPattern("/", "/:section")).toBeNull();
+    expect(matchConfigPattern("/a", "/:section")).toEqual({ section: "a" });
+  });
+
+  it("ignores a source that Next.js rejects at build time, and warns once", async () => {
+    const { matchConfigPattern } = await import("../packages/vinext/src/config/config-matchers.js");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // A bare `*` is a modifier with nothing to modify.
+      const source = "/rejected-source-3677/*";
+      expect(matchConfigPattern("/rejected-source-3677/x", source)).toBeNull();
+      expect(matchConfigPattern("/rejected-source-3677/*", source)).toBeNull();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toContain(source);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  // Parity guard against the matcher Next.js builds for a redirect or rewrite
+  // source at runtime (`buildCustomRoute` in
+  // packages/next/src/server/lib/router-utils/filesystem.ts).
+  it("agrees with Next.js's own matcher", async () => {
+    const { matchConfigPattern } = await import("../packages/vinext/src/config/config-matchers.js");
+    const { getPathMatch } = await import("next/dist/shared/lib/router/utils/path-match.js");
+    const { modifyRouteRegex } = await import("next/dist/lib/redirect-status.js");
+
+    const cases: Array<[source: string, pathnames: string[]]> = [
+      ["/legacy-(.*)", ["/legacy-x", "/legacy-", "/legacy"]],
+      ["/files/(.*\\.pdf)", ["/files/a.pdf", "/files/a/b.pdf", "/files/a.txt"]],
+      ["/(.*).html", ["/a.html", "/a/b.html", "/a.htm"]],
+      ["/hello/(.*)/google", ["/hello/a/google", "/hello/a/b/google", "/hello/google"]],
+      ["/:locale(en|fr)/:path*", ["/en", "/en/a/b", "/de", "/"]],
+      ["/blog/:category/:slug*", ["/blog/post", "/blog/a/b/c", "/blog"]],
+      ["/a/:b?/c", ["/a/c", "/a/x/c", "/a/x/y/c"]],
+      ["/:locale?/about", ["/about", "/en/about", "/en/fr/about"]],
+      ["/:section", ["/", "/a", "/a/b"]],
+      ["/:year-:month", ["/2024-06", "/2024", "/2024-06-01"]],
+      ["/img/:name.:ext", ["/img/a.png", "/img/a", "/img/a.b.png"]],
+    ];
+
+    // Next.js omits an optional param that did not match and returns a
+    // repeated param as an array of segments. vinext returns "" and the
+    // "/"-joined string. Compare the params that have a value.
+    const paramsWithValue = (params: Record<string, unknown> | null | false) =>
+      params
+        ? Object.fromEntries(
+            Object.entries(params)
+              .map(([key, value]) => [key, Array.isArray(value) ? value.join("/") : value])
+              .filter(([, value]) => value !== ""),
+          )
+        : null;
+
+    for (const [source, pathnames] of cases) {
+      const nextMatch = getPathMatch(source, {
+        strict: true,
+        removeUnnamedParams: true,
+        regexModifier: (regex: string) => modifyRouteRegex(regex),
+      });
+      for (const pathname of pathnames) {
+        expect(
+          paramsWithValue(matchConfigPattern(pathname, source)),
+          `${source} vs ${pathname}`,
+        ).toEqual(paramsWithValue(nextMatch(pathname)));
+      }
+    }
   });
 });
 
@@ -14627,11 +14763,13 @@ describe("matchRewrite with external URLs", () => {
     expect(result).toBe("/archive/2024-06");
   });
 
-  it("replaces hyphenated param names without truncating them", async () => {
+  it("ends a source param name at a hyphen, as Next.js does", async () => {
     const { matchRewrite } = await import("../packages/vinext/src/config/config-matchers.js");
+    // path-to-regexp reads `:auth-method` as the param `auth` plus the literal
+    // text `-method`. This is what makes `/:year-:month` two params.
     const rewrites = [{ source: "/auth/:auth-method", destination: "/signin/:auth-method" }];
-    const result = matchRewrite("/auth/google", rewrites, emptyCtx);
-    expect(result).toBe("/signin/google");
+    expect(matchRewrite("/auth/google-method", rewrites, emptyCtx)).toBe("/signin/google-method");
+    expect(matchRewrite("/auth/google", rewrites, emptyCtx)).toBeNull();
   });
 
   it("treats hyphen as a literal delimiter when only the shorter param key exists", async () => {
@@ -14902,11 +15040,13 @@ describe("open redirect prevention in catch-all redirects", () => {
 
   it("matchRedirect sanitizes double-slash in already-decoded paths", async () => {
     const { matchRedirect } = await import("../packages/vinext/src/config/config-matchers.js");
-    const redirects = [{ source: "/old/:path*", destination: "/:path*", permanent: false }];
+    // `:path*` needs non-empty segments, so it cannot capture a leading slash.
+    // A `(.*)` constraint can, and that capture is what the sanitizer must handle.
+    const redirects = [{ source: "/old/:path(.*)", destination: "/:path", permanent: false }];
     // Even if an already-decoded path somehow contains //, the sanitizer should handle it
     const result = matchRedirect("/old//evil.com", redirects, emptyCtx);
     expect(result).not.toBeNull();
-    expect(result!.destination.startsWith("//")).toBe(false);
+    expect(result!.destination).toBe("/evil.com");
   });
 
   it("matchRedirect preserves valid external redirect destinations", async () => {

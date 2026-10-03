@@ -120,11 +120,16 @@ function lexer(value: string): LexerToken[] {
   return tokens;
 }
 
-export function parseMiddlewarePath(value: string): MiddlewarePathToken[] {
+const MIDDLEWARE_DELIMITER = "/#?";
+
+export function parseMiddlewarePath(
+  value: string,
+  delimiter: string = MIDDLEWARE_DELIMITER,
+): MiddlewarePathToken[] {
   const tokens = lexer(value);
   const result: MiddlewarePathToken[] = [];
   const prefixes = "./";
-  const delimiter = "/#?";
+  const segmentCharacter = `[^${escapeRegex(delimiter)}]`;
   let key = 0;
   let index = 0;
   let path = "";
@@ -166,8 +171,8 @@ export function parseMiddlewarePath(value: string): MiddlewarePathToken[] {
       const name = typeof previous === "string" ? previous : previous.name;
       throw new TypeError(`Must have text between two parameters, missing text after "${name}"`);
     }
-    if (!previousText || containsDelimiter(previousText)) return "[^\\/#\\?]+?";
-    return `(?:(?!${escapeRegex(previousText)})[^\\/#\\?])+?`;
+    if (!previousText || containsDelimiter(previousText)) return `${segmentCharacter}+?`;
+    return `(?:(?!${escapeRegex(previousText)})${segmentCharacter})+?`;
   };
 
   while (index < tokens.length) {
@@ -244,8 +249,16 @@ export function normalizeMiddlewarePathTokens(
   });
 }
 
-export function middlewarePathTokensToRegExp(tokens: MiddlewarePathToken[]): RegExp {
-  const delimiter = "/#?";
+/**
+ * `keys` mirrors path-to-regexp's out-parameter: it receives one entry per
+ * capture group, in capture order, so `keys[i]` names `match[i + 1]`. It is
+ * filled here, where the groups are emitted, so the two cannot drift apart.
+ */
+export function middlewarePathTokensToRegExp(
+  tokens: MiddlewarePathToken[],
+  delimiter: string = MIDDLEWARE_DELIMITER,
+  keys?: MiddlewarePathKey[],
+): RegExp {
   const delimiterRegex = `[${escapeRegex(delimiter)}]`;
   let route = "^";
 
@@ -258,6 +271,7 @@ export function middlewarePathTokensToRegExp(tokens: MiddlewarePathToken[]): Reg
     const prefix = escapeRegex(token.prefix);
     const suffix = escapeRegex(token.suffix);
     if (token.pattern) {
+      keys?.push(token);
       if (prefix || suffix) {
         if (token.modifier === "+" || token.modifier === "*") {
           const optional = token.modifier === "*" ? "?" : "";
