@@ -1,90 +1,60 @@
-import {
-  isExternalUrl,
-  matchConfigPattern,
-  matchRewrite,
-  rewriteSourceForDestination,
-  type RequestContext,
-} from "../config/config-matchers.js";
+import { matchesRewriteSource, rewriteSourceForDestination } from "../config/config-matchers.js";
 import type { ResolvedNextConfig } from "../config/next-config.js";
 import type { AppRoute } from "../routing/app-router.js";
 
-type RewriteSourceConfig = Pick<ResolvedNextConfig, "basePath" | "rewrites">;
+type RewriteSourceConfig = Pick<ResolvedNextConfig, "basePath" | "i18n" | "rewrites">;
 type RouteOwner = Pick<AppRoute, "pattern" | "isDynamic">;
 
 /**
- * What a rewrite condition sees in a build request: no cookies, no query, no
- * headers of its own, and the loopback host of the prerender server.
- */
-const BUILD_REQUEST_CONTEXT: RequestContext = {
-  headers: new Headers(),
-  cookies: {},
-  query: new URLSearchParams(),
-  host: "127.0.0.1",
-};
-
-/**
- * Public pathnames that a next.config rewrite can resolve to the page at
- * `pagePathname`.
+ * Public pathnames that a next.config rewrite resolves to the page at
+ * `pagePathname`, as far as the config alone can tell.
  *
- * These are candidates only. A redirect, middleware, or an earlier rule can
- * take a candidate first, and only the request handler knows that. The
- * prerender requests each candidate and keeps the render only when the handler
- * confirms that it resolved to the page.
+ * The prerender requests each of these pathnames, and a request runs what owns
+ * the pathname. That owner must be the page: a route handler, a Pages Router
+ * data function, or another origin must not get a request that the prerender
+ * did not send before. A pathname is therefore left out whenever the config
+ * does not prove that the rule takes it:
  *
- * The build must not request a pathname that it can tell is not a candidate,
- * because the request runs what owns the pathname:
+ * - A rule with `has` / `missing` is not inverted, and an earlier rule whose
+ *   source matches the pathname can take the request, with or without
+ *   conditions. The rule must be the first rule that matches.
+ * - An `afterFiles` rule cannot take a pathname that a route without params
+ *   owns. It runs before dynamic routes, so those do not matter.
+ * - A `fallback` rule runs after dynamic routes. This module cannot tell which
+ *   pathnames they match, so `fallback` rules give no pathnames.
+ * - With `i18n`, a pathname has locale forms that this module does not model.
  *
- * - A rule that runs after the filesystem cannot take a pathname that a route
- *   owns. That route can be a route handler, which the prerender never runs.
- *   `afterFiles` rules run before dynamic routes, `fallback` rules after them.
- * - When the first rule that takes the build's request is an external rewrite,
- *   the request goes to another origin.
- *
- * A request that reaches another origin through a chain of rules is not found
- * here. The build then sends it, as it does for a prerendered page URL with
- * such rules.
+ * Redirects and middleware are not modeled. They run for a prerendered page
+ * URL too, and the request handler has the last word: the prerender keeps a
+ * render only when the handler confirms that it resolved to the page.
  */
 export function collectRewriteSourcePathnames(
   pagePathname: string,
   config: RewriteSourceConfig,
   routes: readonly RouteOwner[],
 ): string[] {
-  const { rewrites } = config;
-  const rules = [...rewrites.beforeFiles, ...rewrites.afterFiles, ...rewrites.fallback];
+  if (config.i18n) return [];
+
+  const { beforeFiles, afterFiles } = config.rewrites;
+  const rules = [...beforeFiles, ...afterFiles];
   // The build requests every URL below basePath.
   const basePathState = { basePath: config.basePath, hadBasePath: true };
-
   const ownedByNonDynamicRoute = (pathname: string) =>
     routes.some((route) => !route.isDynamic && route.pattern === pathname);
-  const matchedByDynamicRoute = (pathname: string) =>
-    routes.some((route) => route.isDynamic && matchConfigPattern(pathname, route.pattern) !== null);
-  const phases = [
-    { rules: rewrites.beforeFiles, routeOwns: () => false },
-    { rules: rewrites.afterFiles, routeOwns: ownedByNonDynamicRoute },
-    {
-      rules: rewrites.fallback,
-      routeOwns: (pathname: string) =>
-        ownedByNonDynamicRoute(pathname) || matchedByDynamicRoute(pathname),
-    },
-  ];
 
-  const sourcePathnames = new Set<string>();
-  for (const phase of phases) {
-    for (const rule of phase.rules) {
-      const sourcePathname = rewriteSourceForDestination(rule, pagePathname);
-      if (sourcePathname === null || sourcePathnames.has(sourcePathname)) continue;
-      if (phase.routeOwns(sourcePathname)) continue;
-      const firstDestination = matchRewrite(
-        sourcePathname,
-        rules,
-        BUILD_REQUEST_CONTEXT,
-        basePathState,
-      );
-      if (firstDestination !== null && isExternalUrl(firstDestination)) continue;
-      sourcePathnames.add(sourcePathname);
+  const sourcePathnames: string[] = [];
+  for (const rule of rules) {
+    const sourcePathname = rewriteSourceForDestination(rule, pagePathname);
+    if (sourcePathname === null) continue;
+    if (
+      rules.find((other) => matchesRewriteSource(sourcePathname, other, basePathState)) !== rule
+    ) {
+      continue;
     }
+    if (afterFiles.includes(rule) && ownedByNonDynamicRoute(sourcePathname)) continue;
+    sourcePathnames.push(sourcePathname);
   }
-  return [...sourcePathnames];
+  return sourcePathnames;
 }
 
 /**
@@ -92,8 +62,7 @@ export function collectRewriteSourcePathnames(
  *
  * The source pathname names the artifact files. On a file system that ignores
  * letter case, two source pathnames that differ only by case share one file,
- * so only the first of them is rendered. One source pathname can be a
- * candidate of more than one page: the handler resolves it to one of them.
+ * so only the first of them is rendered.
  */
 export function collectRewriteSources<Page extends { urlPath: string }>(
   pages: readonly Page[],
@@ -101,13 +70,12 @@ export function collectRewriteSources<Page extends { urlPath: string }>(
   routes: readonly RouteOwner[],
 ): Array<{ page: Page; sourcePathname: string }> {
   const sources: Array<{ page: Page; sourcePathname: string }> = [];
-  const pathnameByFoldedPathname = new Map<string, string>();
+  const foldedPathnames = new Set<string>();
   for (const page of pages) {
     for (const sourcePathname of collectRewriteSourcePathnames(page.urlPath, config, routes)) {
       const foldedPathname = sourcePathname.toLowerCase();
-      const queuedPathname = pathnameByFoldedPathname.get(foldedPathname);
-      if (queuedPathname !== undefined && queuedPathname !== sourcePathname) continue;
-      pathnameByFoldedPathname.set(foldedPathname, sourcePathname);
+      if (foldedPathnames.has(foldedPathname)) continue;
+      foldedPathnames.add(foldedPathname);
       sources.push({ page, sourcePathname });
     }
   }

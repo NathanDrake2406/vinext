@@ -149,194 +149,173 @@ describe("rewriteSourceForDestination", () => {
   });
 });
 
+type Rewrites = Parameters<typeof collectRewriteSourcePathnames>[1]["rewrites"];
+
+const withRewrites = (
+  rewrites: Partial<Rewrites>,
+  basePath = "",
+): Parameters<typeof collectRewriteSourcePathnames>[1] => ({
+  basePath,
+  i18n: null,
+  rewrites: { beforeFiles: [], afterFiles: [], fallback: [], ...rewrites },
+});
+
 describe("collectRewriteSourcePathnames", () => {
-  it("collects each source pathname one time from all rewrite phases", () => {
+  it("collects the source pathnames of the rules that run before dynamic routes", () => {
     expect(
       collectRewriteSourcePathnames(
         "/en/about",
-        {
-          basePath: "",
-          rewrites: {
-            beforeFiles: [{ source: "/a", destination: "/en/about" }],
-            afterFiles: [
-              { source: "/a", destination: "/en/about" },
-              { source: "/b", destination: "/en/about" },
-              { source: "/other", destination: "/en/contact" },
-            ],
-            fallback: [{ source: "/c", destination: "/en/about" }],
-          },
-        },
+        withRewrites({
+          beforeFiles: [{ source: "/a", destination: "/en/about" }],
+          afterFiles: [
+            { source: "/a", destination: "/en/about" },
+            { source: "/b", destination: "/en/about" },
+            { source: "/other", destination: "/en/contact" },
+          ],
+        }),
         [],
       ),
-    ).toEqual(["/a", "/b", "/c"]);
+    ).toEqual(["/a", "/b"]);
   });
 
-  it("leaves out a source pathname when an external rewrite takes the build request first", () => {
+  // The build request for a source pathname runs what owns that pathname. When
+  // an earlier rule can take the pathname, the owner is not the page.
+  it.each<[string, NextRewrite]>([
+    ["an external rewrite", { source: "/about", destination: "https://upstream.example/landing" }],
+    ["a rewrite to a route handler", { source: "/about", destination: "/api/log" }],
+    // The build request has headers that can satisfy a condition.
+    [
+      "a rewrite with a condition",
+      {
+        source: "/about",
+        has: [{ type: "header", key: "accept-language" }],
+        destination: "https://upstream.example/landing",
+      },
+    ],
+  ])("leaves out a source pathname when an earlier rule is %s", (_label, earlierRule) => {
     expect(
       collectRewriteSourcePathnames(
         "/en/about",
-        {
-          basePath: "",
-          rewrites: {
-            beforeFiles: [
-              {
-                source: "/about",
-                missing: [{ type: "cookie", key: "session" }],
-                destination: "https://upstream.example/landing",
-              },
-            ],
-            afterFiles: [
-              { source: "/about", destination: "/en/about" },
-              { source: "/info", destination: "/en/about" },
-            ],
-            fallback: [],
-          },
-        },
+        withRewrites({
+          afterFiles: [
+            earlierRule,
+            { source: "/about", destination: "/en/about" },
+            { source: "/info", destination: "/en/about" },
+          ],
+        }),
         [],
       ),
     ).toEqual(["/info"]);
   });
 
-  // A request for a pathname runs what owns it. A route handler at `/feed`
-  // must not run during the build because a page exists at `/en/feed`.
-  describe("a pathname that a route owns", () => {
-    const rule = { source: "/:name", destination: "/en/:name" };
-    const routes = [
-      { pattern: "/feed", isDynamic: false },
-      { pattern: "/:locale/feed", isDynamic: true },
-    ];
-    const sources = (
-      rewrites: Partial<Record<"beforeFiles" | "afterFiles" | "fallback", [typeof rule]>>,
-    ) =>
-      collectRewriteSourcePathnames(
-        "/en/feed",
-        { basePath: "", rewrites: { beforeFiles: [], afterFiles: [], fallback: [], ...rewrites } },
-        routes,
-      );
-
-    it("is a source of a beforeFiles rule, which runs before the route", () => {
-      expect(sources({ beforeFiles: [rule] })).toEqual(["/feed"]);
-    });
-
-    it("is not a source of an afterFiles rule when a route without params owns it", () => {
-      expect(sources({ afterFiles: [rule] })).toEqual([]);
-    });
-
-    it("is a source of an afterFiles rule when only a dynamic route matches it", () => {
-      expect(
-        collectRewriteSourcePathnames(
-          "/en/about",
-          { basePath: "", rewrites: { beforeFiles: [], afterFiles: [rule], fallback: [] } },
-          [{ pattern: "/:locale", isDynamic: true }],
-        ),
-      ).toEqual(["/about"]);
-    });
-
-    it("is not a source of a fallback rule when a dynamic route matches it", () => {
-      expect(
-        collectRewriteSourcePathnames(
-          "/en/about",
-          { basePath: "", rewrites: { beforeFiles: [], afterFiles: [], fallback: [rule] } },
-          [{ pattern: "/:locale", isDynamic: true }],
-        ),
-      ).toEqual([]);
-    });
-  });
-
-  it.each<[string, Parameters<typeof collectRewriteSourcePathnames>[1]]>([
+  it.each<[string, Partial<Rewrites>, string]>([
     [
       "comes after the rule that takes the pathname",
       {
-        basePath: "",
-        rewrites: {
-          beforeFiles: [],
-          afterFiles: [{ source: "/about", destination: "/en/about" }],
-          fallback: [{ source: "/:path*", destination: "https://legacy.example/:path*" }],
-        },
+        afterFiles: [{ source: "/about", destination: "/en/about" }],
+        fallback: [{ source: "/:path*", destination: "https://legacy.example/:path*" }],
       },
-    ],
-    [
-      "needs a cookie that the build request does not have",
-      {
-        basePath: "",
-        rewrites: {
-          beforeFiles: [
-            {
-              source: "/about",
-              has: [{ type: "cookie", key: "session" }],
-              destination: "https://upstream.example/landing",
-            },
-          ],
-          afterFiles: [{ source: "/about", destination: "/en/about" }],
-          fallback: [],
-        },
-      },
+      "",
     ],
     // The build requests URLs below basePath. The runtime does not evaluate a
     // `basePath: false` rule for such a request.
     [
       "opts out of the basePath that the build request has",
       {
-        basePath: "/docs",
-        rewrites: {
-          beforeFiles: [],
-          afterFiles: [
-            { source: "/:path*", destination: "https://legacy.example/:path*", basePath: false },
-            { source: "/about", destination: "/en/about" },
-          ],
-          fallback: [],
-        },
+        afterFiles: [
+          { source: "/:path*", destination: "https://legacy.example/:path*", basePath: false },
+          { source: "/about", destination: "/en/about" },
+        ],
       },
+      "/docs",
     ],
-  ])("keeps a source pathname when an external rewrite %s", (_label, config) => {
-    expect(collectRewriteSourcePathnames("/en/about", config, [])).toEqual(["/about"]);
+  ])("keeps a source pathname when an external rewrite %s", (_label, rewrites, basePath) => {
+    expect(
+      collectRewriteSourcePathnames("/en/about", withRewrites(rewrites, basePath), []),
+    ).toEqual(["/about"]);
+  });
+
+  // A route handler at `/feed` must not run during the build because a page
+  // exists at `/en/feed`.
+  describe("a pathname that a route owns", () => {
+    const rule = { source: "/:name", destination: "/en/:name" };
+    const routes = [
+      { pattern: "/feed", isDynamic: false },
+      { pattern: "/:locale/feed", isDynamic: true },
+      { pattern: "/:locale", isDynamic: true },
+    ];
+
+    it("is a source of a beforeFiles rule, which runs before the route", () => {
+      expect(
+        collectRewriteSourcePathnames("/en/feed", withRewrites({ beforeFiles: [rule] }), routes),
+      ).toEqual(["/feed"]);
+    });
+
+    it("is not a source of an afterFiles rule when a route without params owns it", () => {
+      expect(
+        collectRewriteSourcePathnames("/en/feed", withRewrites({ afterFiles: [rule] }), routes),
+      ).toEqual([]);
+    });
+
+    it("is a source of an afterFiles rule when only a dynamic route matches it", () => {
+      expect(
+        collectRewriteSourcePathnames("/en/about", withRewrites({ afterFiles: [rule] }), routes),
+      ).toEqual(["/about"]);
+    });
+  });
+
+  it("gives no source pathname for a fallback rule, which runs after dynamic routes", () => {
+    expect(
+      collectRewriteSourcePathnames(
+        "/en/about",
+        withRewrites({ fallback: [{ source: "/about", destination: "/en/about" }] }),
+        [],
+      ),
+    ).toEqual([]);
+  });
+
+  it("gives no source pathname when i18n is configured", () => {
+    expect(
+      collectRewriteSourcePathnames(
+        "/en/about",
+        {
+          ...withRewrites({ afterFiles: [{ source: "/about", destination: "/en/about" }] }),
+          i18n: { locales: ["en", "fr"], defaultLocale: "en" },
+        },
+        [],
+      ),
+    ).toEqual([]);
   });
 });
 
 describe("collectRewriteSources", () => {
-  it("keeps one source pathname as a candidate of each page that a rule maps it to", () => {
-    // The first rule takes `/pricing` at runtime, so only the request handler
-    // can tell that `/en/plans` is the page. Both candidates must be requested.
+  it("gives a source pathname to the page of the first rule that matches it", () => {
+    // The catch-all rule also inverts `/en/pricing` to `/pricing`, but the
+    // first rule takes that pathname at runtime.
     const pages = [{ urlPath: "/en/pricing" }, { urlPath: "/en/plans" }];
     expect(
       collectRewriteSources(
         pages,
-        {
-          basePath: "",
-          rewrites: {
-            beforeFiles: [],
-            afterFiles: [
-              { source: "/pricing", destination: "/en/plans" },
-              { source: "/:name", destination: "/en/:name" },
-            ],
-            fallback: [],
-          },
-        },
+        withRewrites({
+          afterFiles: [
+            { source: "/pricing", destination: "/en/plans" },
+            { source: "/:name", destination: "/en/:name" },
+          ],
+        }),
         [],
       ),
     ).toEqual([
-      { page: pages[0], sourcePathname: "/pricing" },
       { page: pages[1], sourcePathname: "/pricing" },
       { page: pages[1], sourcePathname: "/plans" },
     ]);
   });
 
   it("keeps the first of the source pathnames that differ only by letter case", () => {
-    const pages = [{ urlPath: "/en/about" }];
+    const pages = [{ urlPath: "/en/About" }, { urlPath: "/en/about" }];
     expect(
       collectRewriteSources(
         pages,
-        {
-          basePath: "",
-          rewrites: {
-            beforeFiles: [],
-            afterFiles: [
-              { source: "/About", destination: "/en/about" },
-              { source: "/about", destination: "/en/about" },
-            ],
-            fallback: [],
-          },
-        },
+        withRewrites({ afterFiles: [{ source: "/:name", destination: "/en/:name" }] }),
         [],
       ),
     ).toEqual([{ page: pages[0], sourcePathname: "/About" }]);
