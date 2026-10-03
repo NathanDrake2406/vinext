@@ -269,14 +269,12 @@ type MiddlewarePathRegExpOptions = {
    * filled here, where the groups are emitted, so the two cannot drift apart.
    */
   keys?: MiddlewarePathKey[];
-  /** path-to-regexp's `strict`: do not accept one trailing delimiter. */
-  strict?: boolean;
 };
 
 export function middlewarePathTokensToRegExp(
   tokens: MiddlewarePathToken[],
   delimiter: string = MIDDLEWARE_DELIMITER,
-  { keys, strict = false }: MiddlewarePathRegExpOptions = {},
+  { keys }: MiddlewarePathRegExpOptions = {},
 ): RegExp {
   const delimiterRegex = `[${escapeRegex(delimiter)}]`;
   let route = "^";
@@ -309,6 +307,6 @@ export function middlewarePathTokensToRegExp(
     }
   }
 
-  route += strict ? "$" : `${delimiterRegex}?$`;
+  route += `${delimiterRegex}?$`;
   return new RegExp(route, "i");
 }

@@ -13751,13 +13751,13 @@ describe("matchConfigPattern matches redirect and rewrite sources like Next.js",
     expect(matchConfigPattern("/Blog/Post", "/blog/:slug")).toEqual({ slug: "Post" });
   });
 
-  // One trailing slash is removed from the pathname before the match. The
-  // compiled regex must not accept one more.
-  it("accepts one trailing slash and not two", async () => {
+  // The slash of the root path is not removed before the match. The optional
+  // trailing slash of the compiled regex is what lets a catch-all match it.
+  it("matches the root path with a catch-all", async () => {
     const { matchConfigPattern } = await import("../packages/vinext/src/config/config-matchers.js");
-    expect(matchConfigPattern("/about/", "/about")).toEqual({});
-    expect(matchConfigPattern("/about//", "/about")).toBeNull();
-    expect(matchConfigPattern("/blog/a//", "/blog/:slug")).toBeNull();
+    expect(matchConfigPattern("/", "/:path*")).toEqual({ path: "" });
+    expect(matchConfigPattern("/", "/:path+")).toBeNull();
+    expect(matchConfigPattern("/", "/:locale(en|fr)?")).toEqual({ locale: "" });
   });
 
   it("ignores a source that Next.js rejects at build time, and warns once", async () => {

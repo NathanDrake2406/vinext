@@ -304,13 +304,12 @@ function validateTokens(
 type SourcePatternOptions = {
   delimiter?: string;
   normalizeUnprefixedRepeats: boolean;
-  strict?: boolean;
   unsafeReason: UnsafeTokenReason;
 };
 
 function compileSourcePattern(
   source: string,
-  { delimiter, normalizeUnprefixedRepeats, strict, unsafeReason }: SourcePatternOptions,
+  { delimiter, normalizeUnprefixedRepeats, unsafeReason }: SourcePatternOptions,
 ): CompiledCustomRouteSourcePattern {
   if (!source.startsWith("/")) {
     return { kind: "invalid", error: "source must start with /" };
@@ -334,7 +333,7 @@ function compileSourcePattern(
 
   try {
     const keys: MiddlewarePathKey[] = [];
-    return { regexp: middlewarePathTokensToRegExp(tokens, delimiter, { keys, strict }), keys };
+    return { regexp: middlewarePathTokensToRegExp(tokens, delimiter, { keys }), keys };
   } catch (error) {
     if (!normalizeUnprefixedRepeats) {
       return {
@@ -350,7 +349,7 @@ function compileSourcePattern(
     try {
       const keys: MiddlewarePathKey[] = [];
       return {
-        regexp: middlewarePathTokensToRegExp(normalizedTokens, delimiter, { keys, strict }),
+        regexp: middlewarePathTokensToRegExp(normalizedTokens, delimiter, { keys }),
         keys,
       };
     } catch (error) {
@@ -372,11 +371,10 @@ export function compileMiddlewareMatcherPattern(source: string): CompiledMiddlew
 /**
  * Compile a `redirects()` / `rewrites()` source the way Next.js does: path-to-regexp 6
  * with `delimiter: "/"` (the default `/#?` would stop a segment at a decoded
- * `#` or `?`), case-insensitive, and strict. Next.js then appends an optional
- * trailing slash to the regex. The caller, `matchConfigPattern`, removes one
- * trailing slash from the pathname instead, so the regex must not accept a
- * second one. Unlike middleware matchers, an unprefixed repeat such as
- * `/foo-:id*` is a config error in Next.js, so it is not normalized here.
+ * `#` or `?`), case-insensitive, and an optional trailing slash. The
+ * optional slash is what lets `/:path*` match the root path `/`. Unlike
+ * middleware matchers, an unprefixed repeat such as `/foo-:id*` is a config
+ * error in Next.js, so it is not normalized here.
  *
  * @see .nextjs-ref/packages/next/src/server/lib/router-utils/filesystem.ts (buildCustomRoute)
  * @see .nextjs-ref/packages/next/src/shared/lib/router/utils/path-match.ts
@@ -385,7 +383,6 @@ export function compileCustomRouteSourcePattern(source: string): CompiledCustomR
   const compiled = compileSourcePattern(source, {
     delimiter: CUSTOM_ROUTE_DELIMITER,
     normalizeUnprefixedRepeats: false,
-    strict: true,
     unsafeReason: unsafeCustomRouteTokenReason,
   });
   if (!compiled.regexp) return compiled;
