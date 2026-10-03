@@ -38,6 +38,7 @@ import {
   readPrerenderCacheIdentityHeader,
   type RewriteSourceProbe,
 } from "../packages/vinext/src/server/app-rewrite-cache-identity.js";
+import { ensureFetchPatch } from "../packages/vinext/src/shims/fetch-cache.js";
 import type { NextRequest } from "../packages/vinext/src/shims/server.js";
 import {
   handleMetadataRouteRequest,
@@ -2747,6 +2748,9 @@ describe("createAppRscHandler", () => {
           route === blogRoute ? { slug: pathname.slice("/blog/".length) } : {};
         return { params, route };
       };
+      // The handler replaces the global fetch one time, on its first request.
+      // Install that replacement first, so that it does not remove the stub.
+      ensureFetchPatch();
       vi.stubGlobal("fetch", async () => answer("other origin"));
       const handler = createHandler({
         configHeaders: [],
