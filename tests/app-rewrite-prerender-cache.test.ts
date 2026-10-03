@@ -7,6 +7,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 import vinext from "../packages/vinext/src/index.js";
 import { runPrerender } from "../packages/vinext/src/build/run-prerender.js";
 
+type ManifestRoute = {
+  route: string;
+  status: string;
+  rewrite?: { source: string; cachePathname: string };
+};
+
 function write(root: string, relativePath: string, contents: string): void {
   const file = path.join(root, relativePath);
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -34,8 +40,80 @@ export default async function Page({ params }: { params: Promise<{ locale: strin
 }
 `;
 
+/** Create an app in a temporary directory, build it, and prerender it. */
+async function buildFixture(
+  nextConfig: string,
+  files: Record<string, string>,
+): Promise<{ root: string; routes: ManifestRoute[] }> {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-rewrite-prerender-cache-"));
+  write(root, "package.json", JSON.stringify({ name: "rewrite-prerender-cache", type: "module" }));
+  fs.symlinkSync(
+    path.resolve(import.meta.dirname, "../node_modules"),
+    path.join(root, "node_modules"),
+    "junction",
+  );
+  write(root, "next.config.mjs", nextConfig);
+  write(
+    root,
+    "app/layout.tsx",
+    `export default function Layout({ children }: { children: React.ReactNode }) {
+  return <html><body>{children}</body></html>;
+}
+`,
+  );
+  write(
+    root,
+    "app/pathname.tsx",
+    `"use client";
+import { usePathname } from "next/navigation";
+
+export function Pathname() {
+  return <p>{\`pathname:\${usePathname()}\`}</p>;
+}
+`,
+  );
+  for (const [relativePath, contents] of Object.entries(files)) write(root, relativePath, contents);
+
+  const builder = await createBuilder({
+    root,
+    configFile: false,
+    plugins: [vinext({ appDir: root })],
+    logLevel: "silent",
+  });
+  await builder.buildApp();
+  const result = await runPrerender({ root });
+  return { root, routes: (result?.routes ?? []) as ManifestRoute[] };
+}
+
+async function startServer(root: string): Promise<{ server: Server; baseUrl: string }> {
+  const { startProdServer } = await import("../packages/vinext/src/server/prod-server.js");
+  const { server } = await startProdServer({
+    port: 0,
+    outDir: path.join(root, "dist"),
+    noCompression: true,
+    silent: true,
+  });
+  const address = server.address();
+  return {
+    server,
+    baseUrl: `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`,
+  };
+}
+
+async function stop(server: Server | undefined, root: string): Promise<void> {
+  await new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve()));
+  if (root) fs.rmSync(root, { recursive: true, force: true });
+}
+
 // Ported from the reproduction in https://github.com/cloudflare/vinext/issues/3672:
 // the default locale is served without a prefix through next.config rewrites.
+const UNPREFIXED_DEFAULT_LOCALE_RULES = `
+        { source: "/", destination: "/en" },
+        {
+          source: "/:path((?!en$|en/|es$|es/|api$|api/|_next/).*)",
+          destination: "/en/:path",
+        },`;
+
 describe.each([
   { label: "default config", basePath: "", trailingSlash: false },
   // Both options change the URL that the build requests and the pathname that
@@ -45,6 +123,7 @@ describe.each([
   "prerendered App pages reached through next.config rewrites ($label)",
   ({ basePath, trailingSlash }) => {
     let root = "";
+    let routes: ManifestRoute[] = [];
     let server: Server | undefined;
     let baseUrl = "";
 
@@ -54,72 +133,48 @@ describe.each([
     };
 
     beforeAll(async () => {
-      root = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-rewrite-prerender-cache-"));
-      write(
-        root,
-        "package.json",
-        JSON.stringify({ name: "rewrite-prerender-cache", type: "module" }),
-      );
-      fs.symlinkSync(
-        path.resolve(import.meta.dirname, "../node_modules"),
-        path.join(root, "node_modules"),
-        "junction",
-      );
-      write(
-        root,
-        "next.config.mjs",
+      ({ root, routes } = await buildFixture(
         `export default {
   basePath: ${JSON.stringify(basePath)},
   trailingSlash: ${JSON.stringify(trailingSlash)},
+  async redirects() {
+    // The build request for this rewrite source gets a redirect, not a render.
+    return [{ source: "/legacy", destination: "/about", permanent: false }];
+  },
   async rewrites() {
     return {
       afterFiles: [
-        { source: "/", destination: "/en" },
         // A request without the cookie, such as the build request, takes the first rule.
         { source: "/promo", missing: [{ type: "cookie", key: "seen" }], destination: "/en/about" },
         { source: "/promo", destination: "/en/contact" },
         // An empty catch-all rewrites "/shop" to "/en/shop/", with a trailing slash.
         { source: "/shop/:path*", destination: "/en/shop/:path*" },
-        {
-          source: "/:path((?!en$|en/|es$|es/|api$|api/|_next/).*)",
-          destination: "/en/:path",
-        },
+        // The runtime does not add a trailing slash to a path below "/api".
+        { source: "/api/info", destination: "/en/about" },${UNPREFIXED_DEFAULT_LOCALE_RULES}
       ],
     };
   },
 };
 `,
-      );
-      write(
-        root,
-        "app/layout.tsx",
-        `export default function Layout({ children }: { children: React.ReactNode }) {
-  return <html><body>{children}</body></html>;
-}
-`,
-      );
-      write(
-        root,
-        "app/pathname.tsx",
-        `"use client";
-import { usePathname } from "next/navigation";
+        {
+          "app/[locale]/page.tsx": LOCALE_PAGE("home", 1),
+          "app/[locale]/about/page.tsx": LOCALE_PAGE("about", 2),
+          "app/[locale]/docs/intro/page.tsx": LOCALE_PAGE("docs/intro", 3),
+          // Only the Flight test requests this source URL: a document request
+          // that misses writes the Flight entry too, which would hide a missing seed.
+          "app/[locale]/contact/page.tsx": LOCALE_PAGE("contact", 2),
+          "app/[locale]/shop/page.tsx": LOCALE_PAGE("shop", 2),
+          "app/[locale]/legacy/page.tsx": LOCALE_PAGE("legacy", 2),
+          // The runtime gives a rewritten page the percent-encoded form of a
+          // captured param, so the title lookup accepts both forms.
+          "app/[locale]/blog/[slug]/page.tsx": `const TITLES: Record<string, string> = {
+  "café": "coffee",
+  "caf%C3%A9": "coffee",
+  "with space": "spaced",
+  "with%20space": "spaced",
+};
 
-export function Pathname() {
-  return <p>{\`pathname:\${usePathname()}\`}</p>;
-}
-`,
-      );
-      write(root, "app/[locale]/page.tsx", LOCALE_PAGE("home", 1));
-      write(root, "app/[locale]/about/page.tsx", LOCALE_PAGE("about", 2));
-      write(root, "app/[locale]/docs/intro/page.tsx", LOCALE_PAGE("docs/intro", 3));
-      // Only the Flight test requests this source URL: a document request that
-      // misses writes the Flight entry too, which would hide a missing seed.
-      write(root, "app/[locale]/contact/page.tsx", LOCALE_PAGE("contact", 2));
-      write(root, "app/[locale]/shop/page.tsx", LOCALE_PAGE("shop", 2));
-      write(
-        root,
-        "app/[locale]/blog/[slug]/page.tsx",
-        `export function generateStaticParams() {
+export function generateStaticParams() {
   return [
     { locale: "en", slug: "café" },
     { locale: "en", slug: "with space" },
@@ -128,35 +183,15 @@ export function Pathname() {
 
 export default async function Page({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  return <main><p>{\`page:blog:\${slug}\`}</p></main>;
+  return <main><p>{\`page:blog:\${TITLES[slug]}\`}</p></main>;
 }
 `,
-      );
-
-      const builder = await createBuilder({
-        root,
-        configFile: false,
-        plugins: [vinext({ appDir: root })],
-        logLevel: "silent",
-      });
-      await builder.buildApp();
-      await runPrerender({ root });
-
-      const { startProdServer } = await import("../packages/vinext/src/server/prod-server.js");
-      ({ server } = await startProdServer({
-        port: 0,
-        outDir: path.join(root, "dist"),
-        noCompression: true,
-        silent: true,
-      }));
-      const address = server.address();
-      baseUrl = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`;
+        },
+      ));
+      ({ server, baseUrl } = await startServer(root));
     }, 180_000);
 
-    afterAll(async () => {
-      await new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve()));
-      if (root) fs.rmSync(root, { recursive: true, force: true });
-    });
+    afterAll(() => stop(server, root));
 
     it("serves the prerendered destination URL as a cache hit", async () => {
       const response = await fetch(url("/en/about"));
@@ -188,15 +223,22 @@ export default async function Page({ params }: { params: Promise<{ slug: string 
 
     // The request handler keeps the percent-encoding of the request in the
     // resolved part of the cache pathname.
-    it.each(["/blog/caf%C3%A9", "/blog/with%20space"])(
-      "serves the percent-encoded source URL %s as a cache hit",
-      async (sourcePath) => {
-        const response = await fetch(url(sourcePath));
-        expect(response.status).toBe(200);
-        expect(response.headers.get("x-vinext-cache")).toBe("HIT");
-        expect(await response.text()).toContain("page:blog:");
-      },
-    );
+    it.each([
+      ["/blog/caf%C3%A9", "page:blog:coffee"],
+      ["/blog/with%20space", "page:blog:spaced"],
+    ])("serves the percent-encoded source URL %s as a cache hit", async (sourcePath, marker) => {
+      const response = await fetch(url(sourcePath));
+      expect(response.status).toBe(200);
+      expect(response.headers.get("x-vinext-cache")).toBe("HIT");
+      expect(await response.text()).toContain(marker);
+    });
+
+    it("serves a source URL below /api, which never gets a trailing slash, as a cache hit", async () => {
+      const response = await fetch(`${baseUrl}${basePath}/api/info`);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("x-vinext-cache")).toBe("HIT");
+      expect(await response.text()).toContain("page:about:en");
+    });
 
     it("serves the rewritten source URL Flight payload as a cache hit", async () => {
       const response = await fetch(url("/contact"), {
@@ -208,14 +250,23 @@ export default async function Page({ params }: { params: Promise<{ slug: string 
     });
 
     it("does not seed a source URL with the render of a page that another rule selects", async () => {
-      // The build request for `/promo` resolves to `/en/about`. That render must
-      // not fill the entry that a request with the cookie reads.
+      // The build request for `/promo` resolves to `/en/about`, through a rule
+      // that the build does not invert. The build must not record that render
+      // as the entry of `/en/contact`, which the other `/promo` rule names.
+      expect(routes.filter((route) => route.rewrite?.source === "/promo")).toEqual([]);
+
       const response = await fetch(url("/promo"), { headers: { Cookie: "seen=1" } });
       expect(response.status).toBe(200);
       expect(response.headers.get("x-vinext-cache")).toBe("MISS");
       const html = await response.text();
       expect(html).toContain("page:contact:en");
       expect(html).not.toContain("page:about:en");
+    });
+
+    it("does not report a prerender error for a source URL that does not render", () => {
+      // `/legacy` is a rewrite source of `/en/legacy`, but a redirect takes it.
+      expect(routes.filter((route) => route.rewrite?.source === "/legacy")).toEqual([]);
+      expect(routes.filter((route) => route.status === "error")).toEqual([]);
     });
 
     it("does not register the rewritten source URL as a prerendered path of the route", () => {
@@ -228,61 +279,62 @@ export default async function Page({ params }: { params: Promise<{ slug: string 
   },
 );
 
+describe("next.config rewrites with the redirect that removes the default locale prefix", () => {
+  let root = "";
+  let server: Server | undefined;
+  let baseUrl = "";
+
+  beforeAll(async () => {
+    ({ root } = await buildFixture(
+      `export default {
+  async redirects() {
+    return [{ source: "/en/:path*", destination: "/:path*", permanent: true }];
+  },
+  async rewrites() {
+    return {
+      afterFiles: [${UNPREFIXED_DEFAULT_LOCALE_RULES}
+      ],
+    };
+  },
+};
+`,
+      { "app/[locale]/about/page.tsx": LOCALE_PAGE("about", 2) },
+    ));
+    ({ server, baseUrl } = await startServer(root));
+  }, 180_000);
+
+  afterAll(() => stop(server, root));
+
+  it("serves the source URL as a cache hit although the page URL redirects", async () => {
+    // The build request for `/en/about` gets the redirect, so that URL has no
+    // prerender artifact. The source URL is the only URL that reaches the page.
+    const destination = await fetch(`${baseUrl}/en/about`, { redirect: "manual" });
+    expect(destination.status).toBe(308);
+
+    const source = await fetch(`${baseUrl}/about`);
+    expect(source.status).toBe(200);
+    expect(source.headers.get("x-vinext-cache")).toBe("HIT");
+    expect(await source.text()).toContain("page:about:en");
+  });
+});
+
 describe("static export with next.config rewrites", () => {
   it("does not write rewrite source artifacts into the public export directory", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vinext-rewrite-export-"));
-    try {
-      write(root, "package.json", JSON.stringify({ name: "rewrite-export", type: "module" }));
-      fs.symlinkSync(
-        path.resolve(import.meta.dirname, "../node_modules"),
-        path.join(root, "node_modules"),
-        "junction",
-      );
-      write(
-        root,
-        "next.config.mjs",
-        `export default {
+    const { root, routes } = await buildFixture(
+      `export default {
   output: "export",
   async rewrites() {
     return { afterFiles: [{ source: "/about", destination: "/en/about" }] };
   },
 };
 `,
-      );
-      write(
-        root,
-        "app/layout.tsx",
-        `export default function Layout({ children }: { children: React.ReactNode }) {
-  return <html><body>{children}</body></html>;
-}
-`,
-      );
-      write(
-        root,
-        "app/[locale]/about/page.tsx",
-        `export function generateStaticParams() {
-  return [{ locale: "en" }];
-}
-
-export default function Page() {
-  return <main>about</main>;
-}
-`,
-      );
-
-      const builder = await createBuilder({
-        root,
-        configFile: false,
-        plugins: [vinext({ appDir: root })],
-        logLevel: "silent",
-      });
-      await builder.buildApp();
-      const result = await runPrerender({ root });
-
+      { "app/[locale]/about/page.tsx": LOCALE_PAGE("about", 2) },
+    );
+    try {
       const exportDir = path.join(root, "dist/client");
       expect(fs.existsSync(path.join(exportDir, "en/about.html"))).toBe(true);
       expect(fs.existsSync(path.join(exportDir, "__vinext"))).toBe(false);
-      expect(result?.routes.filter((route) => "rewrite" in route)).toEqual([]);
+      expect(routes.filter((route) => route.rewrite)).toEqual([]);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

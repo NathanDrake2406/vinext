@@ -2520,9 +2520,8 @@ async function handleAppRscRequest<TRoute extends AppRscHandlerRoute>(
   }
   // The build cannot tell from a URL how this handler resolves it. Confirm the
   // cache pathname of a rewritten page render, so the prerender seeds it only
-  // under the key that runtime requests for the same source URL read.
-  // A redirect response can have immutable headers, and the build seeds only a
-  // successful render.
+  // under the key that runtime requests for the same source URL read. The
+  // build seeds only a successful render.
   if (
     !cleanPathnameIsRequestPathname &&
     pageResponse.ok &&

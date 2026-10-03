@@ -1,4 +1,5 @@
 import { VINEXT_PRERENDER_CACHE_IDENTITY_HEADER } from "./headers.js";
+import { normalizePregeneratedPathname } from "./pregenerated-concrete-paths.js";
 
 const REWRITE_MARKER = "?__vinext_rewrite=";
 
@@ -17,22 +18,39 @@ export function appRewriteCachePathname(sourcePathname: string, resolvedPathname
   return `${sourcePathname}${REWRITE_MARKER}${encodeURIComponent(resolvedPathname)}`;
 }
 
-/** The parts of a rewritten cache pathname, or null for the pathname of an unrewritten request. */
-export function parseAppRewriteCachePathname(
+/** A trailing slash does not change which page a pathname names. */
+function pageIdentityPathname(pathname: string): string {
+  const normalized = normalizePregeneratedPathname(pathname);
+  return normalized.length > 1 && normalized.endsWith("/") ? normalized.slice(0, -1) : normalized;
+}
+
+/**
+ * Whether `cachePathname` is the identity that the request handler gives a
+ * request for `requestPathname` that a rewrite resolved to the page at
+ * `pagePathname`.
+ *
+ * The handler keeps the percent-encoding of the request and the trailing slash
+ * of the rewrite destination in the resolved part. The parts are therefore
+ * compared in normalized form. A caller that accepts the value must store the
+ * handler's own spelling: that spelling is the key that a runtime request reads.
+ */
+export function isRewriteCachePathnameOf(
   cachePathname: string,
-): { sourcePathname: string; resolvedPathname: string } | null {
+  requestPathname: string,
+  pagePathname: string,
+): boolean {
   const markerIndex = cachePathname.indexOf(REWRITE_MARKER);
-  if (markerIndex === -1) return null;
+  if (markerIndex === -1) return false;
+  let resolvedPathname: string;
   try {
-    return {
-      sourcePathname: cachePathname.slice(0, markerIndex),
-      resolvedPathname: decodeURIComponent(
-        cachePathname.slice(markerIndex + REWRITE_MARKER.length),
-      ),
-    };
+    resolvedPathname = decodeURIComponent(cachePathname.slice(markerIndex + REWRITE_MARKER.length));
   } catch {
-    return null;
+    return false;
   }
+  return (
+    cachePathname.slice(0, markerIndex) === normalizePregeneratedPathname(requestPathname) &&
+    pageIdentityPathname(resolvedPathname) === pageIdentityPathname(pagePathname)
+  );
 }
 
 /**

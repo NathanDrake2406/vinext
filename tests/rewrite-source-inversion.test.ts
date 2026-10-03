@@ -5,6 +5,7 @@ import {
   rewriteSourceForDestination,
 } from "../packages/vinext/src/config/config-matchers.js";
 import type { NextRewrite } from "../packages/vinext/src/config/next-config.js";
+import { isRewriteCachePathnameOf } from "../packages/vinext/src/server/app-rewrite-cache-identity.js";
 
 // The "default locale without a prefix" rule from
 // https://github.com/cloudflare/vinext/issues/3672.
@@ -123,7 +124,7 @@ describe("collectRewriteSourcePathnames", () => {
     ).toEqual(["/a", "/b", "/c"]);
   });
 
-  it("leaves out a source pathname that an external rewrite can take", () => {
+  it("leaves out a source pathname when an external rewrite takes the build request first", () => {
     expect(
       collectRewriteSourcePathnames("/en/about", {
         beforeFiles: [
@@ -140,5 +141,68 @@ describe("collectRewriteSourcePathnames", () => {
         fallback: [],
       }),
     ).toEqual(["/info"]);
+  });
+
+  it.each<[string, Parameters<typeof collectRewriteSourcePathnames>[1]]>([
+    [
+      "comes after the rule that takes the pathname",
+      {
+        beforeFiles: [],
+        afterFiles: [{ source: "/about", destination: "/en/about" }],
+        fallback: [{ source: "/:path*", destination: "https://legacy.example/:path*" }],
+      },
+    ],
+    [
+      "needs a cookie that the build request does not have",
+      {
+        beforeFiles: [
+          {
+            source: "/about",
+            has: [{ type: "cookie", key: "session" }],
+            destination: "https://upstream.example/landing",
+          },
+        ],
+        afterFiles: [{ source: "/about", destination: "/en/about" }],
+        fallback: [],
+      },
+    ],
+  ])("keeps a source pathname when an external rewrite %s", (_label, rewrites) => {
+    expect(collectRewriteSourcePathnames("/en/about", rewrites)).toEqual(["/about"]);
+  });
+});
+
+describe("isRewriteCachePathnameOf", () => {
+  it.each<[string, string, string, string]>([
+    ["a plain rewrite", "/about?__vinext_rewrite=%2Fen%2Fabout", "/about", "/en/about"],
+    [
+      "a request with a trailing slash",
+      "/about/?__vinext_rewrite=%2Fen%2Fabout",
+      "/about/",
+      "/en/about",
+    ],
+    // The handler decodes the source part and keeps the encoding of the capture.
+    [
+      "a percent-encoded capture",
+      "/blog/caf\u00e9?__vinext_rewrite=%2Fen%2Fblog%2Fcaf%25C3%25A9",
+      "/blog/caf%C3%A9",
+      "/en/blog/caf%C3%A9",
+    ],
+    [
+      "a resolved pathname with a trailing slash",
+      "/shop?__vinext_rewrite=%2Fen%2Fshop%2F",
+      "/shop",
+      "/en/shop",
+    ],
+  ])("accepts the identity of %s", (_label, cachePathname, requestPathname, pagePathname) => {
+    expect(isRewriteCachePathnameOf(cachePathname, requestPathname, pagePathname)).toBe(true);
+  });
+
+  it.each<[string, string, string, string]>([
+    ["another page", "/promo?__vinext_rewrite=%2Fen%2Fabout", "/promo", "/en/contact"],
+    ["another source", "/other?__vinext_rewrite=%2Fen%2Fabout", "/about", "/en/about"],
+    ["an unrewritten request", "/en/about", "/en/about", "/en/about"],
+    ["a malformed resolved pathname", "/about?__vinext_rewrite=%E0%A4%A", "/about", "/en/about"],
+  ])("rejects the identity of %s", (_label, cachePathname, requestPathname, pagePathname) => {
+    expect(isRewriteCachePathnameOf(cachePathname, requestPathname, pagePathname)).toBe(false);
   });
 });

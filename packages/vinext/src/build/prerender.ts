@@ -24,9 +24,9 @@ import type { Route } from "../routing/pages-router.js";
 import { appRouteLayoutStaticParamsGroups, type AppRoute } from "../routing/app-router.js";
 import type { ResolvedNextConfig } from "../config/next-config.js";
 import { buildPregeneratedConcretePathTable } from "../server/prerender-manifest.js";
-import { normalizePregeneratedPathname } from "../server/pregenerated-concrete-paths.js";
+import { normalizeTrailingSlashPathname } from "../server/request-pipeline.js";
 import {
-  parseAppRewriteCachePathname,
+  isRewriteCachePathnameOf,
   readPrerenderCacheIdentityHeader,
 } from "../server/app-rewrite-cache-identity.js";
 import { BLOCKED_PAGES } from "vinext/shims/constants";
@@ -1997,11 +1997,16 @@ export async function prerenderApp({
         // an ordinary static host can serve the output tree verbatim.
         // Ported from Next.js: packages/next/src/export/worker.ts
         // https://github.com/vercel/next.js/blob/canary/packages/next/src/export/worker.ts
-        const requestUrlPath = rewriteSourcePath ?? urlPath;
+        // A visitor reaches a rewritten source URL in the form that the
+        // runtime's trailing-slash redirect leaves it in, and the handler keys
+        // the render by that form. `/api` and file-like paths get no slash.
         const routeRequestPath =
-          config.trailingSlash && !requestUrlPath.endsWith("/")
-            ? `${requestUrlPath}/`
-            : requestUrlPath;
+          rewriteSourcePath !== undefined
+            ? (normalizeTrailingSlashPathname(rewriteSourcePath, config.trailingSlash) ??
+              rewriteSourcePath)
+            : config.trailingSlash && !urlPath.endsWith("/")
+              ? `${urlPath}/`
+              : urlPath;
         const requestPath =
           config.basePath && routeRequestPath === "/" && !config.trailingSlash
             ? config.basePath
@@ -2312,35 +2317,6 @@ export async function prerenderApp({
       restorePrerenderPhase();
     }
   }
-}
-
-/** A trailing slash does not change which page a pathname names. */
-function pageIdentityPathname(pathname: string): string {
-  const normalized = normalizePregeneratedPathname(pathname);
-  return normalized.length > 1 && normalized.endsWith("/") ? normalized.slice(0, -1) : normalized;
-}
-
-/**
- * Whether `cachePathname` is the identity that the request handler gives a
- * request for `requestPathname` that a rewrite resolved to the page at
- * `pagePathname`.
- *
- * The handler keeps the percent-encoding of the request and the trailing slash
- * of the rewrite destination in the resolved part. The parts are therefore
- * compared in normalized form, and the build stores the handler's own
- * spelling: that spelling is the key that a runtime request reads.
- */
-function isRewriteCachePathnameOf(
-  cachePathname: string,
-  requestPathname: string,
-  pagePathname: string,
-): boolean {
-  const identity = parseAppRewriteCachePathname(cachePathname);
-  return (
-    identity !== null &&
-    identity.sourcePathname === normalizePregeneratedPathname(requestPathname) &&
-    pageIdentityPathname(identity.resolvedPathname) === pageIdentityPathname(pagePathname)
-  );
 }
 
 /** Cache life recovered from a prerendered response; `stale` seeds the ISR entry. */
