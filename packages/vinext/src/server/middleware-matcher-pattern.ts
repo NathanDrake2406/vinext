@@ -225,46 +225,6 @@ function regexSafetyReason(token: MiddlewarePathKey, pattern: string): string | 
   return `parameter "${token.name}" contains ${regexSafetyIssue}`;
 }
 
-/**
- * Whether an atom of `pattern` can match one of `characters`. The scan reads
- * every character outside a class, an escape, or a quantifier as a literal.
- * It can therefore report a match that the regex cannot make, but it never
- * misses one.
- */
-function patternMayConsume(pattern: string, characters: string): boolean {
-  for (let index = 0; index < pattern.length; index++) {
-    let atom = pattern[index];
-    if (atom === "\\") {
-      if (index + 1 >= pattern.length) return true;
-      atom += pattern[++index];
-    } else if (atom === "[") {
-      let classEnd = index + 1;
-      if (pattern[classEnd] === "^") classEnd++;
-      while (classEnd < pattern.length && pattern[classEnd] !== "]") {
-        if (pattern[classEnd] === "\\") classEnd++;
-        classEnd++;
-      }
-      if (classEnd >= pattern.length) return true;
-      atom = pattern.slice(index, classEnd + 1);
-      index = classEnd;
-    } else if (atom === "{") {
-      const quantifier = /^\{\d+(?:,\d*)?\}/.exec(pattern.slice(index));
-      if (quantifier) {
-        index += quantifier[0].length - 1;
-        continue;
-      }
-    } else if ("()|?*+^$".includes(atom)) {
-      continue;
-    }
-
-    for (const character of characters) {
-      // `\d`, `\w`, `\s` and `\b` are classes, so only punctuation is escaped.
-      if (atomsOverlap(atom, /\w/.test(character) ? character : `\\${character}`)) return true;
-    }
-  }
-  return false;
-}
-
 type UnsafeTokenReason = (token: MiddlewarePathKey) => string | null;
 
 function unsafeTokenReason(token: MiddlewarePathKey): string | null {
@@ -298,28 +258,35 @@ const CUSTOM_ROUTE_DELIMITER = "/";
  * `[a-z0-9]+[a-z0-9-]*`, but that shape is polynomial, common in slug
  * constraints, and accepted by Next.js.
  *
- * A repeated param compiles to `P(?:/P)*`. Every way to split the path into
- * segments, and every way to match one segment, multiplies across the
- * repetition. The compiled regex is therefore linear only when:
- *   - `P` cannot match an empty value or the separator, so the split is
- *     unique, and
- *   - `P` matches one segment in one way. The unconstrained pattern is one
- *     repeated character class, which does. Any other `P` must pass the
- *     structural scan as the body of a repetition.
+ * A repeated param compiles to `P(?:SEP P)*`, where `SEP` is the param's
+ * suffix plus its prefix (`/` for `/:path*`). Every way to split the path
+ * into segments, and every way to match one segment, multiplies across the
+ * repetition, so the compiled regex is linear only when both are unique.
+ *
+ *   - A constraint `P` must pass the structural scan as the body of a
+ *     repetition. The scan accepts a body only when its matches have a fixed
+ *     width or form a prefix-free set of words. Either property makes the
+ *     split and the match unique, also when `P` can match `SEP`.
+ *   - The unconstrained pattern is one repeated character class, so it
+ *     matches a segment in one way, but the scan cannot see that. Its split
+ *     is unique when the segment cannot contain `SEP`: the class excludes the
+ *     delimiter, and after non-delimiter text (`/:name.:ext+`) a lookahead
+ *     excludes that text.
  */
 function unsafeCustomRouteTokenReason(token: MiddlewarePathKey): string | null {
   const regexSafetyIssue = regexSafetyReason(token, token.pattern);
   if (regexSafetyIssue) return regexSafetyIssue;
   if (token.modifier !== "*" && token.modifier !== "+") return null;
 
-  if (
-    patternMatches(token.pattern, "") ||
-    patternMayConsume(token.pattern, token.suffix + token.prefix)
-  ) {
-    return `repeated parameter "${token.name}" may match an empty value or its separator`;
+  if (token.pattern !== middlewarePathSegmentPattern(CUSTOM_ROUTE_DELIMITER, token.prefix)) {
+    return regexSafetyReason(token, `(?:${token.pattern})*`);
   }
-  if (token.pattern === middlewarePathSegmentPattern(CUSTOM_ROUTE_DELIMITER)) return null;
-  return regexSafetyReason(token, `(?:${token.pattern})*`);
+  const excludesPrefix = token.pattern !== middlewarePathSegmentPattern(CUSTOM_ROUTE_DELIMITER);
+  const separator = token.suffix + token.prefix;
+  // A repeat with no separator (`/foo-:id*`) is a syntax error, which the
+  // compile step reports with the message that Next.js gives.
+  if (excludesPrefix || !separator || separator.includes(CUSTOM_ROUTE_DELIMITER)) return null;
+  return `repeated parameter "${token.name}" may match its separator`;
 }
 
 function validateTokens(
@@ -409,11 +376,22 @@ export function compileMiddlewareMatcherPattern(source: string): CompiledMiddlew
  * @see .nextjs-ref/packages/next/src/shared/lib/router/utils/path-match.ts
  */
 export function compileCustomRouteSourcePattern(source: string): CompiledCustomRouteSourcePattern {
-  return compileSourcePattern(source, {
+  const compiled = compileSourcePattern(source, {
     delimiter: CUSTOM_ROUTE_DELIMITER,
     normalizeUnprefixedRepeats: false,
     unsafeReason: unsafeCustomRouteTokenReason,
   });
+  if (!compiled.regexp) return compiled;
+
+  // The lexer refuses `(` inside a constraint unless `?` follows it, but a
+  // named group `(?<x>…)` passes that test and still captures. One extra
+  // group shifts every later key, so the source is refused. Next.js throws
+  // on such a source when it matches.
+  const groupCount = (new RegExp(`${compiled.regexp.source}|`).exec("")?.length ?? 1) - 1;
+  if (groupCount !== compiled.keys.length) {
+    return { kind: "invalid", error: "Capturing groups are not allowed in a constraint" };
+  }
+  return compiled;
 }
 
 export function validateMiddlewareMatcherPatterns(value: unknown): void {

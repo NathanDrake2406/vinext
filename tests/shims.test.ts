@@ -13350,6 +13350,26 @@ describe("matchConfigPattern rejects ReDoS patterns", () => {
     expect(matchConfigPattern("/12/34/x", "/:p(\\d{2})+/x")).toEqual({ p: "12/34" });
   });
 
+  // After `.`, path-to-regexp gives an unconstrained param a pattern with a
+  // lookahead that keeps `.` out of each segment. That pattern is safe to repeat.
+  it("accepts an unconstrained repeated param that follows a dot", async () => {
+    const { matchConfigPattern } = await import("../packages/vinext/src/config/config-matchers.js");
+    expect(matchConfigPattern("/files/a.tar.gz", "/files/:name.:ext+")).toEqual({
+      name: "a",
+      ext: "tar.gz",
+    });
+    expect(matchConfigPattern("/files/a", "/files/:name.:ext*")).toEqual({ name: "a", ext: "" });
+  });
+
+  // `(?<x>…)` passes the lexer's capturing-group test but still captures, so
+  // `c` would read the capture of `x`. Next.js throws when such a source matches.
+  it("refuses a named capture group inside a constraint", async () => {
+    const { matchConfigPattern } = await import("../packages/vinext/src/config/config-matchers.js");
+    expect(matchConfigPattern("/b/zzz", "/:a((?<x>b))/:c")).toBeNull();
+    // A lookbehind also starts with `(?<` and does not capture.
+    expect(matchConfigPattern("/b/zzz", "/:a((?<!x)b)/:c")).toEqual({ a: "b", c: "zzz" });
+  });
+
   // Two repetitions that can match the same characters are polynomial, not
   // exponential. Next.js accepts them, and they are common in slug constraints.
   it("accepts a constraint with overlapping sequential repetition", async () => {
@@ -13632,6 +13652,13 @@ describe("matchRedirect locale-static index", () => {
     expect(matchRedirect("/a/b/bar", redirects, emptyCtx)).toBeNull();
   });
 
+  it("requires the locale segment when the source does not make it optional", async () => {
+    const { matchRedirect } = await import("../packages/vinext/src/config/config-matchers.js");
+    const redirects = [{ source: "/:locale(en|fr)/foo", destination: "/target", permanent: false }];
+    expect(matchRedirect("/en/foo", redirects, emptyCtx)?.destination).toBe("/target");
+    expect(matchRedirect("/foo", redirects, emptyCtx)).toBeNull();
+  });
+
   it("does not read a hyphen as part of the leading param name", async () => {
     const { matchRedirect } = await import("../packages/vinext/src/config/config-matchers.js");
     // The param is `my`. `-locale` is literal text and `(en|fr)` is an unnamed group.
@@ -13712,6 +13739,11 @@ describe("matchConfigPattern matches redirect and rewrite sources like Next.js",
   it("does not end a segment at a decoded # or ?", async () => {
     const { matchConfigPattern } = await import("../packages/vinext/src/config/config-matchers.js");
     expect(matchConfigPattern("/blog/a#b?c", "/blog/:slug")).toEqual({ slug: "a#b?c" });
+    // `month` follows `-`, so its pattern has a lookahead and a second class.
+    expect(matchConfigPattern("/2024-0#6", "/:year-:month")).toEqual({
+      year: "2024",
+      month: "0#6",
+    });
   });
 
   it("matches without regard to case", async () => {

@@ -122,12 +122,26 @@ function lexer(value: string): LexerToken[] {
 
 const MIDDLEWARE_DELIMITER = "/#?";
 
+function containsDelimiter(text: string, delimiter: string): boolean {
+  for (const character of delimiter) {
+    if (text.includes(character)) return true;
+  }
+  return false;
+}
+
 /**
- * The pattern of a param that has no constraint of its own and follows a
- * delimiter: a lazy run of non-delimiter characters.
+ * The pattern of a param that has no constraint of its own: a lazy run of
+ * non-delimiter characters. When the param follows text that has no
+ * delimiter (`/:name.:ext`, where `ext` follows `.`), a lookahead also keeps
+ * that text out of the run.
  */
-export function middlewarePathSegmentPattern(delimiter: string = MIDDLEWARE_DELIMITER): string {
-  return `[^${escapeRegex(delimiter)}]+?`;
+export function middlewarePathSegmentPattern(
+  delimiter: string = MIDDLEWARE_DELIMITER,
+  precedingText: string = "",
+): string {
+  const segmentCharacter = `[^${escapeRegex(delimiter)}]`;
+  if (!precedingText || containsDelimiter(precedingText, delimiter)) return `${segmentCharacter}+?`;
+  return `(?:(?!${escapeRegex(precedingText)})${segmentCharacter})+?`;
 }
 
 export function parseMiddlewarePath(
@@ -137,7 +151,6 @@ export function parseMiddlewarePath(
   const tokens = lexer(value);
   const result: MiddlewarePathToken[] = [];
   const prefixes = "./";
-  const segmentCharacter = `[^${escapeRegex(delimiter)}]`;
   let key = 0;
   let index = 0;
   let path = "";
@@ -165,13 +178,6 @@ export function parseMiddlewarePath(
     return text;
   };
 
-  const containsDelimiter = (text: string): boolean => {
-    for (const character of delimiter) {
-      if (text.includes(character)) return true;
-    }
-    return false;
-  };
-
   const defaultPattern = (prefix: string): string => {
     const previous = result[result.length - 1];
     const previousText = prefix || (typeof previous === "string" ? previous : "");
@@ -179,10 +185,7 @@ export function parseMiddlewarePath(
       const name = typeof previous === "string" ? previous : previous.name;
       throw new TypeError(`Must have text between two parameters, missing text after "${name}"`);
     }
-    if (!previousText || containsDelimiter(previousText)) {
-      return middlewarePathSegmentPattern(delimiter);
-    }
-    return `(?:(?!${escapeRegex(previousText)})${segmentCharacter})+?`;
+    return middlewarePathSegmentPattern(delimiter, previousText);
   };
 
   while (index < tokens.length) {
