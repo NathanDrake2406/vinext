@@ -318,6 +318,47 @@ describe("next.config rewrites with the redirect that removes the default locale
   });
 });
 
+describe("next.config rewrite sources that differ only by letter case", () => {
+  let root = "";
+  let routes: ManifestRoute[] = [];
+  let server: Server | undefined;
+  let baseUrl = "";
+
+  beforeAll(async () => {
+    ({ root, routes } = await buildFixture(
+      `export default {
+  async rewrites() {
+    return {
+      afterFiles: [
+        { source: "/About", destination: "/en/about" },
+        { source: "/about", destination: "/en/about" },
+      ],
+    };
+  },
+};
+`,
+      { "app/[locale]/about/page.tsx": LOCALE_PAGE("about", 2) },
+    ));
+    ({ server, baseUrl } = await startServer(root));
+  }, 180_000);
+
+  afterAll(() => stop(server, root));
+
+  it("seeds one of them, so their artifact files cannot overwrite each other", async () => {
+    // On a file system that ignores letter case, `About.html` and `about.html`
+    // are one file. Each URL must still get the render of its own pathname.
+    expect(routes.flatMap((route) => route.rewrite?.source ?? [])).toEqual(["/About"]);
+
+    const seeded = await fetch(`${baseUrl}/About`);
+    expect(seeded.headers.get("x-vinext-cache")).toBe("HIT");
+    expect(await seeded.text()).toContain("pathname:/About");
+
+    const rendered = await fetch(`${baseUrl}/about`);
+    expect(rendered.headers.get("x-vinext-cache")).toBe("MISS");
+    expect(await rendered.text()).toContain("pathname:/about");
+  });
+});
+
 describe("static export with next.config rewrites", () => {
   it("does not write rewrite source artifacts into the public export directory", async () => {
     const { root, routes } = await buildFixture(

@@ -1139,6 +1139,8 @@ export function rewriteSourceForDestination(
       .map((token) => (token.kind === "literal" ? token.value : (values.get(token.name) ?? "")))
       .join(""),
   );
+  // Config validation does not reject a source pattern without a leading slash.
+  if (!source.startsWith("/")) return null;
 
   const params = matchConfigPattern(source, rewrite.source);
   if (

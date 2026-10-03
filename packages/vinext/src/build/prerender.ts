@@ -1829,13 +1829,18 @@ export async function prerenderApp({
     // request, and its output directory is public.
     if (mode !== "export") {
       const rewriteSourceUrls: UrlToRender[] = [];
+      // The source pathname names the artifact files. On a file system that
+      // ignores letter case, two sources that differ only by case share one
+      // file, so the build renders only the first of them.
+      const sourceByFoldedPathname = new Map<string, string>();
       for (const page of urlsToRender) {
         // A fallback shell has a placeholder path that no visitor requests.
         if (page.isFallback) continue;
-        for (const rewriteSourcePath of collectRewriteSourcePathnames(
-          page.urlPath,
-          config.rewrites,
-        )) {
+        for (const rewriteSourcePath of collectRewriteSourcePathnames(page.urlPath, config)) {
+          const foldedPathname = rewriteSourcePath.toLowerCase();
+          const queuedPathname = sourceByFoldedPathname.get(foldedPathname);
+          if (queuedPathname !== undefined && queuedPathname !== rewriteSourcePath) continue;
+          sourceByFoldedPathname.set(foldedPathname, rewriteSourcePath);
           rewriteSourceUrls.push({ ...page, rewriteSourcePath });
         }
       }

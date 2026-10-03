@@ -1,10 +1,21 @@
 import {
   isExternalUrl,
   matchRewrite,
-  requestContextFromRequest,
   rewriteSourceForDestination,
+  type RequestContext,
 } from "../config/config-matchers.js";
 import type { ResolvedNextConfig } from "../config/next-config.js";
+
+/**
+ * What a rewrite condition sees in a build request: no cookies, no query, no
+ * headers of its own, and the loopback host of the prerender server.
+ */
+const BUILD_REQUEST_CONTEXT: RequestContext = {
+  headers: new Headers(),
+  cookies: {},
+  query: new URLSearchParams(),
+  host: "127.0.0.1",
+};
 
 /**
  * Public pathnames that a next.config rewrite can resolve to the page at
@@ -23,18 +34,22 @@ import type { ResolvedNextConfig } from "../config/next-config.js";
  */
 export function collectRewriteSourcePathnames(
   pagePathname: string,
-  rewrites: ResolvedNextConfig["rewrites"],
+  config: Pick<ResolvedNextConfig, "basePath" | "rewrites">,
 ): string[] {
+  const { rewrites } = config;
   const rules = [...rewrites.beforeFiles, ...rewrites.afterFiles, ...rewrites.fallback];
+  // The build requests every URL below basePath.
+  const basePathState = { basePath: config.basePath, hadBasePath: true };
   const sourcePathnames = new Set<string>();
   for (const rule of rules) {
     const sourcePathname = rewriteSourceForDestination(rule, pagePathname);
     if (sourcePathname === null || sourcePathnames.has(sourcePathname)) continue;
-    // The build request has no cookies, no query, and no headers of its own.
-    const buildRequest = requestContextFromRequest(
-      new Request(`http://localhost${sourcePathname}`),
+    const firstDestination = matchRewrite(
+      sourcePathname,
+      rules,
+      BUILD_REQUEST_CONTEXT,
+      basePathState,
     );
-    const firstDestination = matchRewrite(sourcePathname, rules, buildRequest);
     if (firstDestination !== null && isExternalUrl(firstDestination)) continue;
     sourcePathnames.add(sourcePathname);
   }

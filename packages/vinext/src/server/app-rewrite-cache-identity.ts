@@ -54,13 +54,24 @@ export function isRewriteCachePathnameOf(
 }
 
 /**
+ * Node's fetch rejects a response whose headers are larger than about 16 KB.
+ * The limit leaves room for the other headers of a page response.
+ */
+const MAX_IDENTITY_HEADER_LENGTH = 4096;
+
+/**
  * Tell the prerender which cache pathname the request handler gave a rewritten
  * page render. Only the handler knows how redirects, middleware and the rewrite
  * phases resolve a URL, so the build asks instead of predicting.
+ *
+ * A very long pathname gets no header: the build then does not seed that URL,
+ * which is better than a response that the build cannot read at all.
  */
 export function applyPrerenderCacheIdentityHeader(headers: Headers, cachePathname: string): void {
   // A pathname can hold characters that a header value cannot.
-  headers.set(VINEXT_PRERENDER_CACHE_IDENTITY_HEADER, encodeURIComponent(cachePathname));
+  const value = encodeURIComponent(cachePathname);
+  if (value.length > MAX_IDENTITY_HEADER_LENGTH) return;
+  headers.set(VINEXT_PRERENDER_CACHE_IDENTITY_HEADER, value);
 }
 
 export function readPrerenderCacheIdentityHeader(headers: Headers): string | null {

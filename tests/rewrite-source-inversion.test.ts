@@ -1,11 +1,20 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { collectRewriteSourcePathnames } from "../packages/vinext/src/build/prerender-rewrite-sources.js";
 import {
   matchRewrite,
   rewriteSourceForDestination,
 } from "../packages/vinext/src/config/config-matchers.js";
 import type { NextRewrite } from "../packages/vinext/src/config/next-config.js";
-import { isRewriteCachePathnameOf } from "../packages/vinext/src/server/app-rewrite-cache-identity.js";
+import {
+  applyPrerenderCacheIdentityHeader,
+  isRewriteCachePathnameOf,
+  readPrerenderCacheIdentityHeader,
+} from "../packages/vinext/src/server/app-rewrite-cache-identity.js";
+import {
+  getOutputPath,
+  getRewriteSourceArtifactPathname,
+  getRscOutputPath,
+} from "../packages/vinext/src/utils/prerender-output-paths.js";
 
 // The "default locale without a prefix" rule from
 // https://github.com/cloudflare/vinext/issues/3672.
@@ -93,19 +102,40 @@ describe("rewriteSourceForDestination", () => {
     ["the destination is external", { source: "/a", destination: "https://example.dev/b" }, "/b"],
     ["the destination has a query", { source: "/a", destination: "/b?view=1" }, "/b"],
     ["the source has an unnamed group", { source: "/(en|es)/a", destination: "/b" }, "/b"],
+    // Config validation accepts this source, but it gives no request pathname.
+    [
+      "the source has no leading slash",
+      { source: ":slug", destination: "/en/blog/:slug" },
+      "/en/blog/intro",
+    ],
   ])("returns null when %s", (_label, rewrite, destinationPathname) => {
     expect(rewriteSourceForDestination(rewrite, destinationPathname)).toBeNull();
   });
 
   it("does not run a constraint that can backtrack without bound", () => {
-    // Against this pathname, `(a+)+` needs about 2^40 steps to fail.
-    const destinationPathname = `/x/${"a".repeat(40)}!`;
-    expect(
-      rewriteSourceForDestination(
-        { source: "/:p((a+)+)", destination: "/x/:p" },
-        destinationPathname,
-      ),
-    ).toBeNull();
+    // Against this pathname, `(a+)+` needs about 2^40 steps to fail. The spy
+    // records such a run and stops it, so a missing guard fails the test fast.
+    const unsafeRuns: string[] = [];
+    const exec: RegExp["exec"] = Reflect.get(RegExp.prototype, "exec");
+    const spy = vi.spyOn(RegExp.prototype, "exec").mockImplementation(function (
+      this: RegExp,
+      input: string,
+    ) {
+      if (!this.source.includes("(a+)+")) return exec.call(this, input);
+      unsafeRuns.push(this.source);
+      return null;
+    });
+    try {
+      expect(
+        rewriteSourceForDestination(
+          { source: "/:p((a+)+)", destination: "/x/:p" },
+          `/x/${"a".repeat(40)}!`,
+        ),
+      ).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+    expect(unsafeRuns).toEqual([]);
   });
 });
 
@@ -113,13 +143,16 @@ describe("collectRewriteSourcePathnames", () => {
   it("collects each source pathname one time from all rewrite phases", () => {
     expect(
       collectRewriteSourcePathnames("/en/about", {
-        beforeFiles: [{ source: "/a", destination: "/en/about" }],
-        afterFiles: [
-          { source: "/a", destination: "/en/about" },
-          { source: "/b", destination: "/en/about" },
-          { source: "/other", destination: "/en/contact" },
-        ],
-        fallback: [{ source: "/c", destination: "/en/about" }],
+        basePath: "",
+        rewrites: {
+          beforeFiles: [{ source: "/a", destination: "/en/about" }],
+          afterFiles: [
+            { source: "/a", destination: "/en/about" },
+            { source: "/b", destination: "/en/about" },
+            { source: "/other", destination: "/en/contact" },
+          ],
+          fallback: [{ source: "/c", destination: "/en/about" }],
+        },
       }),
     ).toEqual(["/a", "/b", "/c"]);
   });
@@ -127,18 +160,21 @@ describe("collectRewriteSourcePathnames", () => {
   it("leaves out a source pathname when an external rewrite takes the build request first", () => {
     expect(
       collectRewriteSourcePathnames("/en/about", {
-        beforeFiles: [
-          {
-            source: "/about",
-            missing: [{ type: "cookie", key: "session" }],
-            destination: "https://upstream.example/landing",
-          },
-        ],
-        afterFiles: [
-          { source: "/about", destination: "/en/about" },
-          { source: "/info", destination: "/en/about" },
-        ],
-        fallback: [],
+        basePath: "",
+        rewrites: {
+          beforeFiles: [
+            {
+              source: "/about",
+              missing: [{ type: "cookie", key: "session" }],
+              destination: "https://upstream.example/landing",
+            },
+          ],
+          afterFiles: [
+            { source: "/about", destination: "/en/about" },
+            { source: "/info", destination: "/en/about" },
+          ],
+          fallback: [],
+        },
       }),
     ).toEqual(["/info"]);
   });
@@ -147,27 +183,91 @@ describe("collectRewriteSourcePathnames", () => {
     [
       "comes after the rule that takes the pathname",
       {
-        beforeFiles: [],
-        afterFiles: [{ source: "/about", destination: "/en/about" }],
-        fallback: [{ source: "/:path*", destination: "https://legacy.example/:path*" }],
+        basePath: "",
+        rewrites: {
+          beforeFiles: [],
+          afterFiles: [{ source: "/about", destination: "/en/about" }],
+          fallback: [{ source: "/:path*", destination: "https://legacy.example/:path*" }],
+        },
       },
     ],
     [
       "needs a cookie that the build request does not have",
       {
-        beforeFiles: [
-          {
-            source: "/about",
-            has: [{ type: "cookie", key: "session" }],
-            destination: "https://upstream.example/landing",
-          },
-        ],
-        afterFiles: [{ source: "/about", destination: "/en/about" }],
-        fallback: [],
+        basePath: "",
+        rewrites: {
+          beforeFiles: [
+            {
+              source: "/about",
+              has: [{ type: "cookie", key: "session" }],
+              destination: "https://upstream.example/landing",
+            },
+          ],
+          afterFiles: [{ source: "/about", destination: "/en/about" }],
+          fallback: [],
+        },
       },
     ],
-  ])("keeps a source pathname when an external rewrite %s", (_label, rewrites) => {
-    expect(collectRewriteSourcePathnames("/en/about", rewrites)).toEqual(["/about"]);
+    // The build requests URLs below basePath. The runtime does not evaluate a
+    // `basePath: false` rule for such a request.
+    [
+      "opts out of the basePath that the build request has",
+      {
+        basePath: "/docs",
+        rewrites: {
+          beforeFiles: [],
+          afterFiles: [
+            { source: "/:path*", destination: "https://legacy.example/:path*", basePath: false },
+            { source: "/about", destination: "/en/about" },
+          ],
+          fallback: [],
+        },
+      },
+    ],
+  ])("keeps a source pathname when an external rewrite %s", (_label, config) => {
+    expect(collectRewriteSourcePathnames("/en/about", config)).toEqual(["/about"]);
+  });
+});
+
+describe("getRewriteSourceArtifactPathname", () => {
+  it.each([false, true])(
+    "names artifact files that no page artifact and no other source uses (trailingSlash: %s)",
+    (trailingSlash) => {
+      // `/`, `/index` and `/404` are the pathnames whose page artifacts have
+      // file names that a source pathname could produce.
+      const pathnames = ["/", "/index", "/404", "/about"];
+      const sourceArtifacts = pathnames.flatMap((pathname) => {
+        const artifactPathname = getRewriteSourceArtifactPathname(pathname);
+        return [getOutputPath(artifactPathname, trailingSlash), getRscOutputPath(artifactPathname)];
+      });
+      const pageArtifacts = pathnames.flatMap((pathname) => [
+        getOutputPath(pathname, trailingSlash),
+        getRscOutputPath(pathname),
+      ]);
+
+      expect(new Set(sourceArtifacts).size).toBe(sourceArtifacts.length);
+      expect(sourceArtifacts.filter((file) => pageArtifacts.includes(file))).toEqual([]);
+    },
+  );
+});
+
+describe("prerender cache identity header", () => {
+  it("carries a cache pathname with characters that a header value cannot hold", () => {
+    const headers = new Headers();
+    const cachePathname = "/blog/café?__vinext_rewrite=%2Fen%2Fblog%2Fcaf%25C3%25A9";
+    applyPrerenderCacheIdentityHeader(headers, cachePathname);
+    expect(readPrerenderCacheIdentityHeader(headers)).toBe(cachePathname);
+  });
+
+  it("does not set a header that can exceed the response header limit of fetch", () => {
+    // Node's fetch rejects a response with more than about 16 KB of headers.
+    // The build must still get the page response, so no header is the answer.
+    const headers = new Headers();
+    applyPrerenderCacheIdentityHeader(
+      headers,
+      `/${"中".repeat(600)}?__vinext_rewrite=%2Fen%2F${"%25E4%25B8%25AD".repeat(600)}`,
+    );
+    expect(readPrerenderCacheIdentityHeader(headers)).toBeNull();
   });
 });
 
