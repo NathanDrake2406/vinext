@@ -262,15 +262,21 @@ export function normalizeMiddlewarePathTokens(
   });
 }
 
-/**
- * `keys` mirrors path-to-regexp's out-parameter: it receives one entry per
- * capture group, in capture order, so `keys[i]` names `match[i + 1]`. It is
- * filled here, where the groups are emitted, so the two cannot drift apart.
- */
+type MiddlewarePathRegExpOptions = {
+  /**
+   * Receives one entry per capture group, in capture order, so `keys[i]`
+   * names `match[i + 1]`. It mirrors path-to-regexp's out-parameter and is
+   * filled here, where the groups are emitted, so the two cannot drift apart.
+   */
+  keys?: MiddlewarePathKey[];
+  /** path-to-regexp's `strict`: do not accept one trailing delimiter. */
+  strict?: boolean;
+};
+
 export function middlewarePathTokensToRegExp(
   tokens: MiddlewarePathToken[],
   delimiter: string = MIDDLEWARE_DELIMITER,
-  keys?: MiddlewarePathKey[],
+  { keys, strict = false }: MiddlewarePathRegExpOptions = {},
 ): RegExp {
   const delimiterRegex = `[${escapeRegex(delimiter)}]`;
   let route = "^";
@@ -303,6 +309,6 @@ export function middlewarePathTokensToRegExp(
     }
   }
 
-  route += `${delimiterRegex}?$`;
+  route += strict ? "$" : `${delimiterRegex}?$`;
   return new RegExp(route, "i");
 }

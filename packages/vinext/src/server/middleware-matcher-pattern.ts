@@ -264,9 +264,9 @@ const CUSTOM_ROUTE_DELIMITER = "/";
  * repetition, so the compiled regex is linear only when both are unique.
  *
  *   - A constraint `P` must pass the structural scan as the body of a
- *     repetition. The scan accepts a body only when its matches have a fixed
- *     width or form a prefix-free set of words. Either property makes the
- *     split and the match unique, also when `P` can match `SEP`.
+ *     repetition. The scan is built to accept a body only when its matches
+ *     have a fixed width or form a prefix-free set of words. Either property
+ *     makes the split and the match unique, also when `P` can match `SEP`.
  *   - The unconstrained pattern is one repeated character class, so it
  *     matches a segment in one way, but the scan cannot see that. Its split
  *     is unique when the segment cannot contain `SEP`: the class excludes the
@@ -304,12 +304,13 @@ function validateTokens(
 type SourcePatternOptions = {
   delimiter?: string;
   normalizeUnprefixedRepeats: boolean;
+  strict?: boolean;
   unsafeReason: UnsafeTokenReason;
 };
 
 function compileSourcePattern(
   source: string,
-  { delimiter, normalizeUnprefixedRepeats, unsafeReason }: SourcePatternOptions,
+  { delimiter, normalizeUnprefixedRepeats, strict, unsafeReason }: SourcePatternOptions,
 ): CompiledCustomRouteSourcePattern {
   if (!source.startsWith("/")) {
     return { kind: "invalid", error: "source must start with /" };
@@ -333,7 +334,7 @@ function compileSourcePattern(
 
   try {
     const keys: MiddlewarePathKey[] = [];
-    return { regexp: middlewarePathTokensToRegExp(tokens, delimiter, keys), keys };
+    return { regexp: middlewarePathTokensToRegExp(tokens, delimiter, { keys, strict }), keys };
   } catch (error) {
     if (!normalizeUnprefixedRepeats) {
       return {
@@ -348,7 +349,10 @@ function compileSourcePattern(
     if (normalizedUnsafeReason) return { kind: "unsafe", error: normalizedUnsafeReason };
     try {
       const keys: MiddlewarePathKey[] = [];
-      return { regexp: middlewarePathTokensToRegExp(normalizedTokens, delimiter, keys), keys };
+      return {
+        regexp: middlewarePathTokensToRegExp(normalizedTokens, delimiter, { keys, strict }),
+        keys,
+      };
     } catch (error) {
       return {
         kind: "invalid",
@@ -368,9 +372,11 @@ export function compileMiddlewareMatcherPattern(source: string): CompiledMiddlew
 /**
  * Compile a `redirects()` / `rewrites()` source the way Next.js does: path-to-regexp 6
  * with `delimiter: "/"` (the default `/#?` would stop a segment at a decoded
- * `#` or `?`), case-insensitive, and an optional trailing slash. Unlike
- * middleware matchers, an unprefixed repeat such as `/foo-:id*` is a config
- * error in Next.js, so it is not normalized here.
+ * `#` or `?`), case-insensitive, and strict. Next.js then appends an optional
+ * trailing slash to the regex. The caller, `matchConfigPattern`, removes one
+ * trailing slash from the pathname instead, so the regex must not accept a
+ * second one. Unlike middleware matchers, an unprefixed repeat such as
+ * `/foo-:id*` is a config error in Next.js, so it is not normalized here.
  *
  * @see .nextjs-ref/packages/next/src/server/lib/router-utils/filesystem.ts (buildCustomRoute)
  * @see .nextjs-ref/packages/next/src/shared/lib/router/utils/path-match.ts
@@ -379,6 +385,7 @@ export function compileCustomRouteSourcePattern(source: string): CompiledCustomR
   const compiled = compileSourcePattern(source, {
     delimiter: CUSTOM_ROUTE_DELIMITER,
     normalizeUnprefixedRepeats: false,
+    strict: true,
     unsafeReason: unsafeCustomRouteTokenReason,
   });
   if (!compiled.regexp) return compiled;
