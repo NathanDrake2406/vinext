@@ -171,8 +171,11 @@ function getCachedRegex<K, V>(cache: Map<K, V | null>, key: K, compile: () => V 
  *     lookup cannot represent.
  *   - The param name stops at the first non-word character, as it does in
  *     path-to-regexp.
+ *   - The suffix does not end in `/`. The lookup removes the trailing slash
+ *     of the pathname, so it could never find a key that ends in one.
+ *     `matchConfigPattern` matches such a source against `/en/old/`.
  */
-const _LOCALE_STATIC_RE = /^\/:\w+\(([\w|-]+)\)(\??)\/([a-zA-Z0-9_~.%@!$&',;=/-]+)$/;
+const _LOCALE_STATIC_RE = /^\/:\w+\(([\w|-]+)\)(\??)\/([a-zA-Z0-9_~.%@!$&',;=/-]+)(?<!\/)$/;
 
 type LocaleStaticEntry = {
   /** The param name extracted from the source (e.g. "locale"). */

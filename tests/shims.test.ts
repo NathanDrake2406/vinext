@@ -13674,6 +13674,27 @@ describe("matchRedirect locale-static index", () => {
     expect(matchRedirect("/en/file.txt", escaped, emptyCtx)?.destination).toBe("/target");
   });
 
+  // The index looks a pathname up without its trailing slash, so it cannot
+  // hold a source that ends in one. With `trailingSlash: true`, the locale
+  // expansion of a plain source such as `/old/` produces that shape.
+  it("matches a locale source that ends in a slash", async () => {
+    const { applyLocaleToRoutes, matchRedirect } =
+      await import("../packages/vinext/src/config/config-matchers.js");
+    const redirects = [
+      { source: "/:locale(en|fr)/old/", destination: "/target", permanent: false },
+    ];
+    expect(matchRedirect("/en/old/", redirects, emptyCtx)?.destination).toBe("/target");
+    expect(matchRedirect("/en/old", redirects, emptyCtx)).toBeNull();
+
+    const expanded = applyLocaleToRoutes(
+      [{ source: "/old/", destination: "/new/", permanent: false }],
+      { locales: ["en", "fr"], defaultLocale: "en" },
+      "redirect",
+      { trailingSlash: true },
+    );
+    expect(matchRedirect("/fr/old/", expanded, emptyCtx)?.destination).toBe("/fr/new/");
+  });
+
   it("applies an indexed rule to a pathname with repeated slashes", async () => {
     const { matchRedirect } = await import("../packages/vinext/src/config/config-matchers.js");
     const redirects = [
