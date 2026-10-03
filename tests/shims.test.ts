@@ -15316,11 +15316,14 @@ describe("open redirect prevention in catch-all redirects", () => {
 
   it("matchRedirect sanitizes double-slash in already-decoded paths", async () => {
     const { matchRedirect } = await import("../packages/vinext/src/config/config-matchers.js");
-    const redirects = [{ source: "/old/:path*", destination: "/:path*", permanent: false }];
-    // Even if an already-decoded path somehow contains //, the sanitizer should handle it
+    // The matcher collapses repeated slashes, so `:path*` cannot capture a
+    // leading slash. A `(.*)` constraint with no slash in front of it can:
+    // here `path` is `/evil.com`, and the substituted destination is
+    // `//evil.com` before the sanitizer runs.
+    const redirects = [{ source: "/old:path(.*)", destination: "/:path", permanent: false }];
     const result = matchRedirect("/old//evil.com", redirects, emptyCtx);
     expect(result).not.toBeNull();
-    expect(result!.destination.startsWith("//")).toBe(false);
+    expect(result!.destination).toBe("/evil.com");
   });
 
   it("matchRedirect preserves valid external redirect destinations", async () => {
