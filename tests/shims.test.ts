@@ -24911,6 +24911,103 @@ describe("Pages Router _next/data client navigation", () => {
     }
   });
 
+  // The router answers simple sources without the full matcher, which it loads
+  // on demand. For each source below, that shortcut must reach the same
+  // result as the server: either by its own answer or by asking the matcher.
+  it.each([
+    {
+      label: "a rewrite of /:param does not capture the root path",
+      rewrites: [{ source: "/:section", destination: "/target" }],
+      href: "/",
+      pages: ["/", "/start", "/target"],
+      expectedPage: "/",
+      expectedQuery: {},
+    },
+    {
+      label: "a rewrite param name ends at a hyphen",
+      rewrites: [{ source: "/auth/:auth-method", destination: "/signin/:auth-method" }],
+      href: "/auth/google",
+      pages: ["/start", "/auth/[method]", "/signin/[method]"],
+      expectedPage: "/auth/[method]",
+      expectedQuery: { method: "google" },
+    },
+    {
+      label: "a rewrite with an optional param substitutes its value",
+      rewrites: [{ source: "/shop/:id?", destination: "/store/:id" }],
+      href: "/shop/1",
+      pages: ["/start", "/shop/[id]", "/store/[id]"],
+      expectedPage: "/store/[id]",
+      expectedQuery: { id: "1" },
+    },
+    {
+      label: "a redirect with an optional param matches without the segment",
+      redirects: [{ source: "/shop/:id?", destination: "/target", permanent: false }],
+      href: "/shop",
+      pages: ["/start", "/shop", "/target"],
+      expectedPage: "/target",
+      expectedQuery: {},
+    },
+    {
+      label: "a redirect with a group after literal text in one segment matches",
+      redirects: [{ source: "/legacy-(.*)", destination: "/moved/here", permanent: false }],
+      href: "/legacy-x",
+      // The destination has two segments, so `/[slug]` cannot also match it.
+      pages: ["/start", "/[slug]", "/moved/here"],
+      expectedPage: "/moved/here",
+      expectedQuery: {},
+    },
+    {
+      label: "a literal source matches without regard to case",
+      rewrites: [{ source: "/old/page", destination: "/new/page" }],
+      href: "/OLD/Page",
+      pages: ["/start", "/old/page", "/new/page"],
+      expectedPage: "/new/page",
+      expectedQuery: {},
+    },
+  ])(
+    "matches config rule sources like the server: $label",
+    async ({ rewrites, redirects, href, pages, expectedPage, expectedQuery }) => {
+      const previousWindow = (globalThis as any).window;
+      const originalFetch = globalThis.fetch;
+      const loaders = Object.fromEntries(
+        pages.map((page) => [page, vi.fn(async () => makePageModule(page))]),
+      );
+      const { win } = createDataNavWindow({
+        page: "/start",
+        pathname: "/start",
+        loaders,
+        ssgPatterns: [],
+        sspPatterns: [],
+      });
+      if (rewrites) {
+        (win as any).__VINEXT_CLIENT_REWRITES__ = {
+          beforeFiles: rewrites,
+          afterFiles: [],
+          fallback: [],
+        };
+      }
+      if (redirects) (win as any).__VINEXT_CLIENT_REDIRECTS__ = redirects;
+      (globalThis as any).window = win;
+      vi.resetModules();
+      globalThis.fetch = vi.fn(async () => new Response("{}")) as typeof fetch;
+
+      try {
+        const Router = (await import("../packages/vinext/src/shims/router.js")).default;
+        expect(await Router.push(href)).toBe(true);
+        expect(win.__NEXT_DATA__.page).toBe(expectedPage);
+        expect(win.__NEXT_DATA__.query).toEqual(expectedQuery);
+        for (const [page, loader] of Object.entries(loaders)) {
+          expect(loader, page).toHaveBeenCalledTimes(page === expectedPage ? 1 : 0);
+        }
+      } finally {
+        if (previousWindow === undefined) delete (globalThis as any).window;
+        else (globalThis as any).window = previousWindow;
+        globalThis.fetch = originalFetch;
+        vi.resetModules();
+      }
+    },
+  );
+
   it.each([
     [
       "an HttpOnly cookie",
