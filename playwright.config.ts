@@ -485,6 +485,18 @@ const projectServers = {
       timeout: 60_000,
     },
   },
+  "next-intl": {
+    testDir: "./tests/e2e/next-intl",
+    use: { baseURL: "http://localhost:4220" },
+    server: {
+      command:
+        "npx vp run vinext#build && node ../../../../packages/vinext/dist/cli.js build && node ../../../../packages/vinext/dist/cli.js start --port 4220",
+      cwd: "./tests/fixtures/ecosystem/next-intl",
+      port: 4220,
+      reuseExistingServer: !process.env.CI,
+      timeout: 120_000,
+    },
+  },
   "pages-router-basepath-dev": {
     testDir: "./tests/e2e/pages-router-basepath-dev",
     use: { baseURL: "http://localhost:4189" },

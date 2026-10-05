@@ -594,6 +594,10 @@ jobs:
             label: app-front-redirect-issue
             shardIndex: 1
             shardTotal: 1
+          - project: next-intl
+            label: next-intl
+            shardIndex: 1
+            shardTotal: 1
           - project: web-worker-vinext
             label: web-worker-vinext
             shardIndex: 1
