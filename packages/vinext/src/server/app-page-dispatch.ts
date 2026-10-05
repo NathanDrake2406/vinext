@@ -1280,14 +1280,13 @@ async function dispatchAppPageInner<TRoute extends AppPageDispatchRoute>(
         if (hasActiveLoadingBoundary) {
           return null;
         }
-        const pageError = await options.runWithReactCacheScope(() =>
-          probeAppPageThrownError({
-            probePage: () => options.probePage(pageSearchParams),
-            runWithSuppressedHookWarning(probe) {
-              return options.runWithSuppressedHookWarning(probe);
-            },
-          }),
-        );
+        const pageError = await probeAppPageThrownError({
+          probePage: () => options.probePage(pageSearchParams),
+          runWithReactCacheScope: options.runWithReactCacheScope,
+          runWithSuppressedHookWarning(probe) {
+            return options.runWithSuppressedHookWarning(probe);
+          },
+        });
         return resolveAppPageSpecialError(pageError);
       },
       renderErrorBoundaryPage(buildError) {

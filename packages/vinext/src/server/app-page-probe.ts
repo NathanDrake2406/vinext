@@ -461,14 +461,6 @@ export async function probeAppPageBeforeRender(
     return { response: null, layoutFlags };
   }
 
-  // One React cache per probe. Layouts are probed separately, deepest first,
-  // so a shared cache would leak a deeper layout's `cache()` state into a
-  // shallower layout that renders before it.
-  const probeLayoutAt = (layoutIndex: number): Promise<unknown> =>
-    options.runWithReactCacheScope(async () => options.probeLayoutAt(layoutIndex));
-  const probePage = (): Promise<unknown> =>
-    options.runWithReactCacheScope(async () => options.probePage());
-
   // Layouts render before their children in Next.js, so layout-level special
   // errors must be handled before probing the page component itself.
   if (options.layoutCount > 0) {
@@ -482,7 +474,11 @@ export async function probeAppPageBeforeRender(
 
         return options.renderLayoutSpecialError(specialError, layoutIndex);
       },
-      probeLayoutAt,
+      probeLayoutAt: options.probeLayoutAt,
+      // One React cache per probe. Layouts are probed separately, deepest
+      // first, so a shared cache would leak a deeper layout's `cache()` state
+      // into a shallower layout that renders before it.
+      runWithReactCacheScope: options.runWithReactCacheScope,
       runWithSuppressedHookWarning(probe) {
         return options.runWithSuppressedHookWarning(probe);
       },
@@ -526,7 +522,8 @@ export async function probeAppPageBeforeRender(
       // The real RSC/SSR render path will surface those properly below.
       return null;
     },
-    probePage,
+    probePage: options.probePage,
+    runWithReactCacheScope: options.runWithReactCacheScope,
     runWithSuppressedHookWarning(probe) {
       return options.runWithSuppressedHookWarning(probe);
     },

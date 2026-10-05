@@ -200,6 +200,42 @@ describe("app page probe helpers", () => {
     ]);
   });
 
+  it("settles each React cache scope when connection() interrupts its probe", async () => {
+    const { connection } = await import("../packages/vinext/src/shims/server.js");
+    const events: string[] = [];
+
+    await probeAppPageBeforeRender({
+      hasLoadingBoundary: false,
+      layoutCount: 1,
+      async probeLayoutAt() {
+        await connection();
+        events.push("layout:after-connection");
+      },
+      async probePage() {
+        await connection();
+        events.push("page:after-connection");
+      },
+      renderLayoutSpecialError: vi.fn(),
+      renderPageSpecialError: vi.fn(),
+      resolveSpecialError: () => null,
+      async runWithReactCacheScope(run) {
+        events.push("scope:open");
+        try {
+          return await run();
+        } finally {
+          events.push("scope:close");
+        }
+      },
+      runWithSuppressedHookWarning(probe) {
+        return probe();
+      },
+    });
+
+    // A scope that never closes would keep its throwaway Flight render, and
+    // the render's cacheSignal(), pending forever.
+    expect(events).toEqual(["scope:open", "scope:close", "scope:open", "scope:close"]);
+  });
+
   it("handles layout special errors before probing the page", async () => {
     const layoutError = new Error("layout failed");
     const pageProbe = vi.fn(() => "page");

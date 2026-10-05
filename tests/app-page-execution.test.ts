@@ -906,6 +906,7 @@ describe("app page execution helpers", () => {
         }
         return null;
       },
+      runWithReactCacheScope: (run) => run(),
       runWithSuppressedHookWarning(probe) {
         return probe();
       },
@@ -925,6 +926,7 @@ describe("app page execution helpers", () => {
       probePage() {
         return new Promise<void>(() => {});
       },
+      runWithReactCacheScope: (run) => run(),
       runWithSuppressedHookWarning(probe) {
         return probe();
       },
@@ -967,6 +969,7 @@ describe("app page execution helpers", () => {
       probeLayoutAt() {
         return null;
       },
+      runWithReactCacheScope: (run) => run(),
       runWithSuppressedHookWarning(probe) {
         return probe();
       },
@@ -1004,6 +1007,7 @@ describe("app page execution helpers", () => {
       probeLayoutAt() {
         return null;
       },
+      runWithReactCacheScope: (run) => run(),
       runWithSuppressedHookWarning(probe) {
         return probe();
       },
@@ -1040,6 +1044,7 @@ describe("app page execution helpers", () => {
       probeLayoutAt() {
         return null;
       },
+      runWithReactCacheScope: (run) => run(),
       runWithSuppressedHookWarning(probe) {
         return probe();
       },
@@ -1060,6 +1065,7 @@ describe("app page execution helpers", () => {
         if (layoutIndex === 1) throw new Error("use() outside render");
         return null;
       },
+      runWithReactCacheScope: (run) => run(),
       runWithSuppressedHookWarning(probe) {
         return probe();
       },
@@ -1096,6 +1102,7 @@ describe("app page execution helpers", () => {
         }
         return null;
       },
+      runWithReactCacheScope: (run) => run(),
       runWithSuppressedHookWarning(probe) {
         return probe();
       },
@@ -1136,6 +1143,7 @@ describe("app page execution helpers", () => {
       probeLayoutAt() {
         return null;
       },
+      runWithReactCacheScope: (run) => run(),
       runWithSuppressedHookWarning(probe) {
         return probe();
       },
@@ -1174,6 +1182,7 @@ describe("app page execution helpers", () => {
         if (layoutIndex === 1) throw layoutError;
         return null;
       },
+      runWithReactCacheScope: (run) => run(),
       runWithSuppressedHookWarning(probe) {
         return probe();
       },
@@ -1213,6 +1222,7 @@ describe("app page execution helpers", () => {
       probeLayoutAt() {
         return null;
       },
+      runWithReactCacheScope: (run) => run(),
       runWithSuppressedHookWarning(probe) {
         return probe();
       },
@@ -1243,6 +1253,7 @@ describe("app page execution helpers", () => {
       probeLayoutAt() {
         return null;
       },
+      runWithReactCacheScope: (run) => run(),
       runWithSuppressedHookWarning(probe) {
         return probe();
       },
@@ -1299,6 +1310,7 @@ describe("app page execution helpers", () => {
       probeLayoutAt() {
         return null;
       },
+      runWithReactCacheScope: (run) => run(),
       runWithSuppressedHookWarning(probe) {
         return probe();
       },
@@ -1349,6 +1361,7 @@ describe("app page execution helpers", () => {
       probeLayoutAt() {
         return null;
       },
+      runWithReactCacheScope: (run) => run(),
       runWithSuppressedHookWarning(probe) {
         return probe();
       },
@@ -1410,6 +1423,7 @@ describe("app page execution helpers", () => {
         if (layoutIndex === 1) throw new Error("headers() outside render");
         return null;
       },
+      runWithReactCacheScope: (run) => run(),
       runWithSuppressedHookWarning(probe) {
         return probe();
       },

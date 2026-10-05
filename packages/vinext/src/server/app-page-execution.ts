@@ -18,6 +18,7 @@ import { parseNextHttpErrorDigest, parseNextRedirectDigest } from "./next-error-
 import { renderSsrErrorMetaTags } from "./app-ssr-error-meta.js";
 import { isPromiseLike } from "../utils/promise.js";
 import { formatNextRedirectDigest } from "./app-rsc-redirect-flight.js";
+import type { ReactCacheScopeRunner } from "./app-react-cache-scope.js";
 import { runWithConnectionProbe } from "vinext/shims/headers";
 
 export type { LayoutFlags };
@@ -176,6 +177,7 @@ type ProbeAppPageLayoutsOptions = {
   layoutCount: number;
   onLayoutError: (error: unknown, layoutIndex: number) => Promise<Response | null>;
   probeLayoutAt: (layoutIndex: number) => unknown;
+  runWithReactCacheScope: ReactCacheScopeRunner;
   runWithSuppressedHookWarning<T>(probe: () => Promise<T>): Promise<T>;
   /** When provided, enables per-layout static/dynamic classification. */
   classification?: LayoutClassificationOptions | null;
@@ -185,11 +187,13 @@ type ProbeAppPageComponentOptions = {
   awaitAsyncResult: boolean;
   onError: (error: unknown) => Promise<Response | null>;
   probePage: () => unknown;
+  runWithReactCacheScope: ReactCacheScopeRunner;
   runWithSuppressedHookWarning<T>(probe: () => Promise<T>): Promise<T>;
 };
 
 type ProbeAppPageThrownErrorOptions = {
   probePage: () => unknown;
+  runWithReactCacheScope: ReactCacheScopeRunner;
   runWithSuppressedHookWarning<T>(probe: () => Promise<T>): Promise<T>;
 };
 
@@ -528,7 +532,9 @@ export async function probeAppPageLayouts(
         // dynamic API usage (headers(), cookies(), connection(), etc.)
         try {
           const { dynamicDetected } = await cls.runWithIsolatedDynamicScope(async () => {
-            const outcome = await runWithConnectionProbe(() => options.probeLayoutAt(layoutIndex));
+            const outcome = await options.runWithReactCacheScope(() =>
+              runWithConnectionProbe(() => options.probeLayoutAt(layoutIndex)),
+            );
             return outcome.completed ? outcome.result : null;
           });
           const observationDynamic = cls.isLayoutObservationDynamic?.(layoutId) === true;
@@ -571,17 +577,19 @@ async function probeLayoutForErrors(
   options: ProbeAppPageLayoutsOptions,
   layoutIndex: number,
 ): Promise<Response | null> {
-  const outcome = await runWithConnectionProbe(async () => {
-    try {
-      const layoutResult = options.probeLayoutAt(layoutIndex);
-      if (isPromiseLike(layoutResult)) {
-        await layoutResult;
+  const outcome = await options.runWithReactCacheScope(() =>
+    runWithConnectionProbe(async () => {
+      try {
+        const layoutResult = options.probeLayoutAt(layoutIndex);
+        if (isPromiseLike(layoutResult)) {
+          await layoutResult;
+        }
+      } catch (error) {
+        return options.onLayoutError(error, layoutIndex);
       }
-    } catch (error) {
-      return options.onLayoutError(error, layoutIndex);
-    }
-    return null;
-  });
+      return null;
+    }),
+  );
 
   return outcome.completed ? outcome.result : null;
 }
@@ -590,22 +598,24 @@ export async function probeAppPageComponent(
   options: ProbeAppPageComponentOptions,
 ): Promise<Response | null> {
   return options.runWithSuppressedHookWarning(async () => {
-    const outcome = await runWithConnectionProbe(async () => {
-      try {
-        const pageResult = options.probePage();
-        if (isPromiseLike(pageResult)) {
-          if (options.awaitAsyncResult) {
-            await pageResult;
-          } else {
-            void Promise.resolve(pageResult).catch(() => {});
+    const outcome = await options.runWithReactCacheScope(() =>
+      runWithConnectionProbe(async () => {
+        try {
+          const pageResult = options.probePage();
+          if (isPromiseLike(pageResult)) {
+            if (options.awaitAsyncResult) {
+              await pageResult;
+            } else {
+              void Promise.resolve(pageResult).catch(() => {});
+            }
           }
+        } catch (error) {
+          return options.onError(error);
         }
-      } catch (error) {
-        return options.onError(error);
-      }
 
-      return null;
-    });
+        return null;
+      }),
+    );
 
     return outcome.completed ? outcome.result : null;
   });
@@ -615,18 +625,20 @@ export async function probeAppPageThrownError(
   options: ProbeAppPageThrownErrorOptions,
 ): Promise<unknown> {
   return options.runWithSuppressedHookWarning(async () => {
-    const outcome = await runWithConnectionProbe(async () => {
-      try {
-        const pageResult = options.probePage();
-        if (isPromiseLike(pageResult)) {
-          await pageResult;
+    const outcome = await options.runWithReactCacheScope(() =>
+      runWithConnectionProbe(async () => {
+        try {
+          const pageResult = options.probePage();
+          if (isPromiseLike(pageResult)) {
+            await pageResult;
+          }
+        } catch (error) {
+          return { error, thrown: true } as const;
         }
-      } catch (error) {
-        return { error, thrown: true } as const;
-      }
 
-      return { error: null, thrown: false } as const;
-    });
+        return { error: null, thrown: false } as const;
+      }),
+    );
 
     return outcome.completed && outcome.result.thrown ? outcome.result.error : null;
   });
