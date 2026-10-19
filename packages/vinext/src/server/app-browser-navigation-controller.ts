@@ -117,6 +117,8 @@ type BrowserNavigationControllerDeps = {
     previousNextUrl: string | null,
     bfcacheIds?: Readonly<Record<string, string>> | null,
   ) => void;
+  /** Fetch the current URL's route again, without clearing caches. */
+  refreshCurrentRoute?: () => void;
 };
 
 type BrowserNavigationPayloadOptions = {
@@ -576,6 +578,16 @@ export function createAppBrowserNavigationController(
     }
     clearCommittedNavigationFailureTargets(nextNavigationRenderId);
     settleNavigationCommits(nextNavigationRenderId, false, keptRenderId);
+
+    // A kept optimistic shell lost its authoritative render to the discarded
+    // navigation. Fetch the current URL after the commit, as Next.js fills a
+    // restored tree lazily, unless another navigation begins first.
+    if (keptState?.activeOperation?.navigationCommitKind === "detached") {
+      const discardNavigationId = activeNavigationId;
+      queueMicrotask(() => {
+        if (activeNavigationId === discardNavigationId) deps.refreshCurrentRoute?.();
+      });
+    }
 
     const restoredState = keptState ?? visibleState;
     if (restoredState && setBrowserRouterState) {

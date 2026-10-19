@@ -4349,8 +4349,14 @@ describe("app browser navigation controller", () => {
   });
 
   describe("URL commit boundary", () => {
-    async function renderPendingNavigation() {
-      const harness = createControllerHarness();
+    async function renderPendingNavigation(
+      navigationCommitKind: "authoritative" | "detached" = "authoritative",
+      refreshCurrentRoute?: () => void,
+    ) {
+      const harness = createControllerHarness(
+        undefined,
+        refreshCurrentRoute ? { refreshCurrentRoute } : undefined,
+      );
       const { controller, stateRef } = harness;
       const commitEffect = createCommitEffectSpy();
       const targetHref = "https://example.com/dashboard";
@@ -4360,6 +4366,7 @@ describe("app browser navigation controller", () => {
         actionType: "navigate",
         createNavigationCommitEffect: () => commitEffect,
         historyUpdateMode: "push",
+        navigationCommitKind,
         navigationInitiationState: stateRef.current,
         navigationSnapshot: createClientNavigationRenderSnapshot(targetHref, {}),
         navId: controller.beginNavigation(),
@@ -4454,6 +4461,62 @@ describe("app browser navigation controller", () => {
         expect(commitEffect.publish).toHaveBeenCalledTimes(1);
       } finally {
         detach();
+      }
+    });
+
+    // The discarded navigation superseded the shell's own navigation, so the
+    // shell's authoritative render can no longer commit. Runs synchronously,
+    // like the commit it stands for.
+    function discardDuringCommit(
+      pending: Awaited<ReturnType<typeof renderPendingNavigation>>,
+    ): void {
+      const { boundary, controller, previousState, renderId } = pending;
+      boundary.getSnapshotBeforeUpdate({ renderId: renderId - 1 });
+      controller.beginNavigation();
+      controller.beginNavigationRenderCommit(renderId);
+      controller.flushCommittingNavigationUrl();
+      expect(controller.discardPendingNavigation(previousState)).toBe(true);
+      controller.commitNavigationRender(renderId);
+    }
+
+    it("refetches the current route after the commit when it keeps an optimistic shell", async () => {
+      const refreshCurrentRoute = vi.fn();
+      const pending = await renderPendingNavigation("detached", refreshCurrentRoute);
+
+      try {
+        discardDuringCommit(pending);
+        expect(refreshCurrentRoute).not.toHaveBeenCalled();
+        await Promise.resolve();
+        expect(refreshCurrentRoute).toHaveBeenCalledTimes(1);
+      } finally {
+        pending.detach();
+      }
+    });
+
+    it("does not refetch a kept optimistic shell when a navigation begins first", async () => {
+      const refreshCurrentRoute = vi.fn();
+      const pending = await renderPendingNavigation("detached", refreshCurrentRoute);
+
+      try {
+        discardDuringCommit(pending);
+        pending.controller.beginNavigation();
+        await Promise.resolve();
+        expect(refreshCurrentRoute).not.toHaveBeenCalled();
+      } finally {
+        pending.detach();
+      }
+    });
+
+    it("does not refetch when it keeps an authoritative render", async () => {
+      const refreshCurrentRoute = vi.fn();
+      const pending = await renderPendingNavigation("authoritative", refreshCurrentRoute);
+
+      try {
+        discardDuringCommit(pending);
+        await Promise.resolve();
+        expect(refreshCurrentRoute).not.toHaveBeenCalled();
+      } finally {
+        pending.detach();
       }
     });
   });

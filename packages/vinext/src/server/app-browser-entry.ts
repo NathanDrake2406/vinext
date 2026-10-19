@@ -349,6 +349,13 @@ const browserNavigationController = createAppBrowserNavigationController({
   },
   syncHistoryStatePreviousNextUrl: (previousNextUrl, bfcacheIds) =>
     historyController.syncCurrentHistoryStatePreviousNextUrl(previousNextUrl, bfcacheIds),
+  refreshCurrentRoute: () => {
+    const navigate = getNavigationRuntime()?.functions.navigate;
+    if (!navigate) return;
+    startTransition(() => {
+      void navigate(window.location.href, 0, "refresh", undefined, undefined, true);
+    });
+  },
 });
 const discardedServerActionRefreshScheduler = hasServerActions
   ? createDiscardedServerActionRefreshScheduler({

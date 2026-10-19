@@ -6,8 +6,12 @@ const ROOT = "/nextjs-compat/optimistic-shell-shallow";
 
 // Learns the route's shell template, then holds the response for the given
 // sibling URL so its navigation commits the optimistic shell first.
-async function prepareOptimisticShell(page: Page, id: string): Promise<() => void> {
-  await page.goto(`${BASE}${ROOT}`);
+async function prepareOptimisticShell(
+  page: Page,
+  id: string,
+  startPath = ROOT,
+): Promise<() => void> {
+  await page.goto(`${BASE}${startPath}`);
   await waitForAppRouterHydration(page);
   await expect(page.locator("#optimistic-shell-home")).toBeVisible();
 
@@ -95,5 +99,26 @@ test.describe("shallow history write during an optimistic shell", () => {
     await expect(page.locator("#slow-3-page")).toBeVisible({ timeout: 10_000 });
     await expect(page).toHaveURL(`${BASE}${ROOT}/slow/3`);
     await expect(page.getByTestId("debug-mode")).toHaveCount(0);
+  });
+
+  // A cleanup of the page being left starts a navigation during the shell's
+  // commit, then a raw write discards it. The shell's own navigation is
+  // superseded, so the content for the current URL is fetched again.
+  test("fills in a shell kept by discarding a navigation started during its commit", async ({
+    page,
+  }) => {
+    const releaseNavigation = await prepareOptimisticShell(page, "2", `${ROOT}/push-on-leave`);
+    const historyLength = await page.evaluate(() => history.length);
+
+    await page.click("#slow-2-link");
+
+    await expect(page.locator("#slow-2-page")).toBeVisible({ timeout: 10_000 });
+    await expect(page).toHaveURL(`${BASE}${ROOT}/slow/2?x=1`);
+    releaseNavigation();
+    await page.waitForLoadState("networkidle");
+    await expect(page.locator("#slow-2-page")).toBeVisible();
+    await expect(page.locator("#slow-loading, #final")).toHaveCount(0);
+    await expect(page).toHaveURL(`${BASE}${ROOT}/slow/2?x=1`);
+    expect(await page.evaluate(() => history.length)).toBe(historyLength + 1);
   });
 });
