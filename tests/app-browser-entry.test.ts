@@ -4064,8 +4064,8 @@ describe("app browser navigation controller", () => {
       expect(stateRef.current.renderId).toBeGreaterThan(0);
       expect(stateRef.current.navigationSnapshot.searchParams.get("with-query-param")).toBe("");
       expect(setBrowserRouterState).toHaveBeenLastCalledWith(stateRef.current);
-      // URL and scroll effects still wait for NavigationCommitSignal's layout
-      // effect; hash-rsc-requests.browser.spec.ts verifies that real commit.
+      // URL and scroll effects still wait for React to commit the render;
+      // hash-rsc-requests.browser.spec.ts verifies that real commit.
       expect(commitEffect.commitUrl).not.toHaveBeenCalled();
       expect(commitEffect.publish).not.toHaveBeenCalled();
     } finally {
@@ -4265,8 +4265,8 @@ describe("app browser navigation controller", () => {
       await Promise.resolve();
       await Promise.resolve();
 
-      // Pre-paint effect is queued but not yet run (drainPrePaintEffects
-      // only fires inside NavigationCommitSignal's useLayoutEffect).
+      // The commit effect is queued but not yet run: it runs only when React
+      // commits the render.
       expect(commitEffect.commitUrl).not.toHaveBeenCalled();
       expect(commitEffect.publish).not.toHaveBeenCalled();
 
@@ -4344,6 +4344,57 @@ describe("app browser navigation controller", () => {
       expect(controller.discardPendingNavigation(visibleState)).toBe(false);
     } finally {
       clearAppRouterScrollIntent();
+      detach();
+    }
+  });
+
+  it("writes the URL once from the URL commit boundary and keeps the navigation committing", async () => {
+    const harness = createControllerHarness();
+    const { controller, detach, stateRef } = harness;
+    const commitEffect = createCommitEffectSpy();
+    const targetHref = "https://example.com/dashboard";
+
+    try {
+      const navId = controller.beginNavigation();
+      const dispatched = harness.waitForNextVisibleCommitDispatch();
+      const outcome = controller.renderNavigationPayload({
+        actionType: "navigate",
+        createNavigationCommitEffect: () => commitEffect,
+        historyUpdateMode: "push",
+        navigationInitiationState: stateRef.current,
+        navigationSnapshot: createClientNavigationRenderSnapshot(targetHref, {}),
+        navId,
+        nextElements: Promise.resolve(
+          createResolvedElements("route:/dashboard", "/", null, {
+            "page:/dashboard": React.createElement("main", null, "dashboard"),
+          }),
+        ),
+        operationLane: "navigation",
+        params: {},
+        payloadOrigin: FRESH_APP_NAVIGATION_PAYLOAD_ORIGIN,
+        pendingRouterState: null,
+        previousNextUrl: null,
+        targetHref,
+      });
+      await dispatched;
+      const renderId = stateRef.current.renderId;
+
+      // React calls this before it changes the DOM of the commit.
+      const boundary = new controller.NavigationUrlCommitBoundary({ renderId });
+      boundary.getSnapshotBeforeUpdate({ renderId: renderId - 1 });
+      expect(commitEffect.commitUrl).toHaveBeenCalledExactlyOnceWith({ keepCurrentUrl: false });
+      expect(commitEffect.publish).not.toHaveBeenCalled();
+
+      // A raw history write from a cleanup of the page being left runs here,
+      // before NavigationCommitSignal's effects. The navigation must survive it.
+      expect(controller.discardPendingNavigation(stateRef.current)).toBe(false);
+
+      controller.beginNavigationRenderCommit(renderId);
+      controller.commitNavigationRender(renderId);
+      await expect(outcome).resolves.toBe("committed");
+      expect(commitEffect.commitUrl).toHaveBeenCalledTimes(1);
+      expect(commitEffect.publish).toHaveBeenCalledExactlyOnceWith({ releaseSnapshot: true });
+    } finally {
       detach();
     }
   });

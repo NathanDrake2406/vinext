@@ -203,7 +203,11 @@ type BrowserNavigationController = {
       children?: ReactNode;
     },
   ): ReactNode;
-  NavigationUrlCommitBoundary: typeof Component<NavigationUrlCommitBoundaryProps>;
+  NavigationUrlCommitBoundary: new (
+    props: NavigationUrlCommitBoundaryProps,
+  ) => Component<NavigationUrlCommitBoundaryProps> & {
+    getSnapshotBeforeUpdate(prevProps: NavigationUrlCommitBoundaryProps): null;
+  };
 };
 
 type NavigationUrlCommitBoundaryProps = {
@@ -339,8 +343,8 @@ export function createAppBrowserNavigationController(
   let activeNavigationId = 0;
   let pendingUserNavigationId: number | null = null;
   let pendingUserNavigationLane: OperationLane | null = null;
-  // Set between a navigation render's insertion and layout effects, while
-  // React commits it but before its URL update has run.
+  // Set while React commits a navigation render, from before its DOM changes
+  // until its layout effect publishes it.
   let committingNavigationRenderId: number | null = null;
   // Whether a render has started committing since the pending user navigation
   // began. From then on it is visible and can no longer be discarded.
@@ -744,6 +748,9 @@ export function createAppBrowserNavigationController(
   class NavigationUrlCommitBoundary extends Component<NavigationUrlCommitBoundaryProps> {
     override getSnapshotBeforeUpdate(prevProps: NavigationUrlCommitBoundaryProps): null {
       if (prevProps.renderId !== this.props.renderId) {
+        // Start the commit with the URL write, so a raw history write from a
+        // cleanup of the page being left lands on the committed navigation.
+        beginNavigationRenderCommit(this.props.renderId);
         commitNavigationUrl(this.props.renderId);
       }
       return null;
@@ -807,8 +814,8 @@ export function createAppBrowserNavigationController(
       // search+hash response whose visible tree is unchanged can be retained by
       // React without mounting the new NavigationCommitSignal, though. In that
       // narrow synchronous mode, publish the resolved state directly as well;
-      // the signal's layout effect remains the authority for URL and scroll
-      // effects, including when the response suspends or changes the tree.
+      // the commit signals remain the authority for URL and scroll effects,
+      // including when the response suspends or changes the tree.
       if (pendingRouterState.settled) return;
       const committedState = captureCandidateState(
         applyApprovedVisibleCommit(getBrowserRouterState(), commit),
