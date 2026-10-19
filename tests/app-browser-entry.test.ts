@@ -4348,14 +4348,12 @@ describe("app browser navigation controller", () => {
     }
   });
 
-  it("writes the URL once from the URL commit boundary and keeps the navigation committing", async () => {
-    const harness = createControllerHarness();
-    const { controller, detach, stateRef } = harness;
-    const commitEffect = createCommitEffectSpy();
-    const targetHref = "https://example.com/dashboard";
-
-    try {
-      const navId = controller.beginNavigation();
+  describe("URL commit boundary", () => {
+    async function renderPendingNavigation() {
+      const harness = createControllerHarness();
+      const { controller, stateRef } = harness;
+      const commitEffect = createCommitEffectSpy();
+      const targetHref = "https://example.com/dashboard";
       const dispatched = harness.waitForNextVisibleCommitDispatch();
       const outcome = controller.renderNavigationPayload({
         actionType: "navigate",
@@ -4363,7 +4361,7 @@ describe("app browser navigation controller", () => {
         historyUpdateMode: "push",
         navigationInitiationState: stateRef.current,
         navigationSnapshot: createClientNavigationRenderSnapshot(targetHref, {}),
-        navId,
+        navId: controller.beginNavigation(),
         nextElements: Promise.resolve(
           createResolvedElements("route:/dashboard", "/", null, {
             "page:/dashboard": React.createElement("main", null, "dashboard"),
@@ -4378,25 +4376,63 @@ describe("app browser navigation controller", () => {
       });
       await dispatched;
       const renderId = stateRef.current.renderId;
-
-      // React calls this before it changes the DOM of the commit.
+      // React calls getSnapshotBeforeUpdate before it changes the DOM of the commit.
       const boundary = new controller.NavigationUrlCommitBoundary({ renderId });
-      boundary.getSnapshotBeforeUpdate({ renderId: renderId - 1 });
-      expect(commitEffect.commitUrl).toHaveBeenCalledExactlyOnceWith({ keepCurrentUrl: false });
-      expect(commitEffect.publish).not.toHaveBeenCalled();
-
-      // A raw history write from a cleanup of the page being left runs here,
-      // before NavigationCommitSignal's effects. The navigation must survive it.
-      expect(controller.discardPendingNavigation(stateRef.current)).toBe(false);
-
-      controller.beginNavigationRenderCommit(renderId);
-      controller.commitNavigationRender(renderId);
-      await expect(outcome).resolves.toBe("committed");
-      expect(commitEffect.commitUrl).toHaveBeenCalledTimes(1);
-      expect(commitEffect.publish).toHaveBeenCalledExactlyOnceWith({ releaseSnapshot: true });
-    } finally {
-      detach();
+      return { ...harness, boundary, commitEffect, outcome, renderId };
     }
+
+    it("writes the URL once and keeps the navigation committing", async () => {
+      const { boundary, commitEffect, controller, detach, outcome, renderId, stateRef } =
+        await renderPendingNavigation();
+
+      try {
+        boundary.getSnapshotBeforeUpdate({ renderId: renderId - 1 });
+        expect(commitEffect.commitUrl).toHaveBeenCalledExactlyOnceWith({ keepCurrentUrl: false });
+        expect(commitEffect.publish).not.toHaveBeenCalled();
+
+        // A raw history write from a cleanup of the page being left runs here,
+        // before NavigationCommitSignal's effects. The navigation must survive it.
+        expect(controller.discardPendingNavigation(stateRef.current)).toBe(false);
+
+        controller.beginNavigationRenderCommit(renderId);
+        controller.commitNavigationRender(renderId);
+        await expect(outcome).resolves.toBe("committed");
+        expect(commitEffect.commitUrl).toHaveBeenCalledTimes(1);
+        expect(commitEffect.publish).toHaveBeenCalledExactlyOnceWith({ releaseSnapshot: true });
+      } finally {
+        detach();
+      }
+    });
+
+    it("does nothing when an update keeps the render id", async () => {
+      const { boundary, commitEffect, controller, detach, renderId, stateRef } =
+        await renderPendingNavigation();
+
+      try {
+        boundary.getSnapshotBeforeUpdate({ renderId });
+        expect(commitEffect.commitUrl).not.toHaveBeenCalled();
+        // The render has not started to commit, so a raw history write still
+        // discards the navigation.
+        expect(controller.discardPendingNavigation(stateRef.current)).toBe(true);
+      } finally {
+        detach();
+      }
+    });
+
+    it("does not mark a navigation that starts during the commit as committing", async () => {
+      const { boundary, controller, detach, renderId, stateRef } = await renderPendingNavigation();
+
+      try {
+        boundary.getSnapshotBeforeUpdate({ renderId: renderId - 1 });
+        // A cleanup of the page being left starts another navigation.
+        controller.beginNavigation();
+        // NavigationCommitSignal's insertion effect begins the same render again.
+        controller.beginNavigationRenderCommit(renderId);
+        expect(controller.discardPendingNavigation(stateRef.current)).toBe(true);
+      } finally {
+        detach();
+      }
+    });
   });
 
   describe("history write after an optimistic shell commits", () => {

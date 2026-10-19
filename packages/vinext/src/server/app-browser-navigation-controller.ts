@@ -661,6 +661,9 @@ export function createAppBrowserNavigationController(
 
   /** Runs when React starts committing a render, before any layout effect. */
   function beginNavigationRenderCommit(renderId: number): void {
+    // NavigationUrlCommitBoundary and NavigationCommitSignal both begin a
+    // render. A navigation that starts between the two calls has not committed.
+    if (committingNavigationRenderId === renderId) return;
     committingNavigationRenderId = renderId;
     // The optimistic shell is a detached commit: the authoritative render
     // that follows is still pending, so it does not end discardability.
