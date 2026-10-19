@@ -1,4 +1,5 @@
 import {
+  Component,
   startTransition,
   useInsertionEffect,
   useLayoutEffect,
@@ -202,7 +203,12 @@ type BrowserNavigationController = {
       children?: ReactNode;
     },
   ): ReactNode;
-  NavigationUrlCommitSignal(this: void, { renderId }: { renderId: number }): null;
+  NavigationUrlCommitBoundary: typeof Component<NavigationUrlCommitBoundaryProps>;
+};
+
+type NavigationUrlCommitBoundaryProps = {
+  renderId: number;
+  children?: ReactNode;
 };
 
 const HARD_NAVIGATION_LOOP_GUARD_KEY = "__vinext_hard_navigation_target__";
@@ -732,14 +738,23 @@ export function createAppBrowserNavigationController(
     }
   }
 
-  // Render before the route tree: React runs an earlier sibling's insertion
-  // effects before it changes a later sibling's DOM, as Next.js's
-  // HistoryUpdater relies on.
-  function NavigationUrlCommitSignal(this: void, { renderId }: { renderId: number }): null {
-    useInsertionEffect(() => {
-      commitNavigationUrl(renderId);
-    }, [renderId]);
-    return null;
+  // React calls getSnapshotBeforeUpdate before it changes the DOM of any
+  // component in the commit. A wrapper adds no sibling, so useId values still
+  // match the server-rendered tree.
+  class NavigationUrlCommitBoundary extends Component<NavigationUrlCommitBoundaryProps> {
+    override getSnapshotBeforeUpdate(prevProps: NavigationUrlCommitBoundaryProps): null {
+      if (prevProps.renderId !== this.props.renderId) {
+        commitNavigationUrl(this.props.renderId);
+      }
+      return null;
+    }
+
+    // React requires componentDidUpdate alongside getSnapshotBeforeUpdate.
+    override componentDidUpdate(): void {}
+
+    override render(): ReactNode {
+      return this.props.children;
+    }
   }
 
   function NavigationCommitSignal(
@@ -1275,6 +1290,6 @@ export function createAppBrowserNavigationController(
     commitNavigationRender,
     clearCommittedNavigationFailureTargets,
     NavigationCommitSignal,
-    NavigationUrlCommitSignal,
+    NavigationUrlCommitBoundary,
   };
 }

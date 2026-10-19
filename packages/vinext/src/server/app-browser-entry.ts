@@ -371,7 +371,7 @@ const discardedServerActionRefreshScheduler = hasServerActions
     };
 const serverActionSupplementalRefreshCoordinator = createSupplementalRefreshCoordinator();
 const NavigationCommitSignal = browserNavigationController.NavigationCommitSignal;
-const NavigationUrlCommitSignal = browserNavigationController.NavigationUrlCommitSignal;
+const NavigationUrlCommitBoundary = browserNavigationController.NavigationUrlCommitBoundary;
 const ACTION_HTTP_FALLBACK_ROBOTS_META_ATTR = "data-vinext-action-http-fallback";
 
 function syncServerActionHttpFallbackHead(status: number | null): void {
@@ -1501,14 +1501,17 @@ function BrowserRoot({
   const routeTree = createElement(
     RedirectBoundary,
     null,
-    createElement(NavigationUrlCommitSignal, { renderId: treeState.renderId }),
     createElement(
-      NavigationCommitSignal,
+      NavigationUrlCommitBoundary,
       { renderId: treeState.renderId },
       createElement(
-        ElementsContext.Provider,
-        { value: treeState.elements },
-        createElement(Slot, { id: treeState.routeId }),
+        NavigationCommitSignal,
+        { renderId: treeState.renderId },
+        createElement(
+          ElementsContext.Provider,
+          { value: treeState.elements },
+          createElement(Slot, { id: treeState.routeId }),
+        ),
       ),
     ),
   );
