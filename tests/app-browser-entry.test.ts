@@ -4354,6 +4354,7 @@ describe("app browser navigation controller", () => {
       const { controller, stateRef } = harness;
       const commitEffect = createCommitEffectSpy();
       const targetHref = "https://example.com/dashboard";
+      const previousState = stateRef.current;
       const dispatched = harness.waitForNextVisibleCommitDispatch();
       const outcome = controller.renderNavigationPayload({
         actionType: "navigate",
@@ -4378,7 +4379,7 @@ describe("app browser navigation controller", () => {
       const renderId = stateRef.current.renderId;
       // React calls getSnapshotBeforeUpdate before it changes the DOM of the commit.
       const boundary = new controller.NavigationUrlCommitBoundary({ renderId });
-      return { ...harness, boundary, commitEffect, outcome, renderId };
+      return { ...harness, boundary, commitEffect, outcome, previousState, renderId };
     }
 
     it("writes the URL once and keeps the navigation committing", async () => {
@@ -4419,8 +4420,17 @@ describe("app browser navigation controller", () => {
       }
     });
 
-    it("does not mark a navigation that starts during the commit as committing", async () => {
-      const { boundary, controller, detach, renderId, stateRef } = await renderPendingNavigation();
+    it("discards a navigation that starts during the commit and keeps the committing render", async () => {
+      const {
+        boundary,
+        commitEffect,
+        controller,
+        detach,
+        outcome,
+        previousState,
+        renderId,
+        setBrowserRouterState,
+      } = await renderPendingNavigation();
 
       try {
         boundary.getSnapshotBeforeUpdate({ renderId: renderId - 1 });
@@ -4428,7 +4438,20 @@ describe("app browser navigation controller", () => {
         controller.beginNavigation();
         // NavigationCommitSignal's insertion effect begins the same render again.
         controller.beginNavigationRenderCommit(renderId);
-        expect(controller.discardPendingNavigation(stateRef.current)).toBe(true);
+
+        // A raw history write flushes the committing render, then discards the
+        // navigation that has not committed. The caller passes the history
+        // snapshot, which still holds the tree from before this commit.
+        controller.flushCommittingNavigationUrl();
+        expect(controller.discardPendingNavigation(previousState)).toBe(true);
+        expect(setBrowserRouterState).toHaveBeenLastCalledWith(
+          expect.objectContaining({ renderId }),
+        );
+
+        controller.commitNavigationRender(renderId);
+        await expect(outcome).resolves.toBe("committed");
+        expect(commitEffect.commitUrl).toHaveBeenCalledTimes(1);
+        expect(commitEffect.publish).toHaveBeenCalledTimes(1);
       } finally {
         detach();
       }

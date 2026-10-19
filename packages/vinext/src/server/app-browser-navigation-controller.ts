@@ -556,21 +556,32 @@ export function createAppBrowserNavigationController(
     // the top-of-page fallback that navigateClientSide schedules may scroll.
     clearAppRouterScrollIntent();
 
+    // A render React is committing now belongs to an earlier navigation that
+    // this one superseded during the commit. It is already visible and has
+    // written its URL, so it stays, and it is the state to restore.
+    const keptRenderId = committingNavigationRenderId;
+    const keptState =
+      keptRenderId === null
+        ? null
+        : (pendingNavigationCommits.get(keptRenderId)?.committedState ?? null);
+
     // These renders will never mount their NavigationCommitSignal, so release
     // their render snapshots here; hooks then read the URL the history write
     // just committed. Their commit effects would only do the same, since the
     // navigation id above is no longer current.
     for (const renderId of pendingNavigationPrePaintEffects.keys()) {
+      if (renderId === keptRenderId) continue;
       pendingNavigationPrePaintEffects.delete(renderId);
       releaseRenderSnapshot(renderId);
     }
     clearCommittedNavigationFailureTargets(nextNavigationRenderId);
-    settleNavigationCommits(nextNavigationRenderId, false);
+    settleNavigationCommits(nextNavigationRenderId, false, keptRenderId);
 
-    if (visibleState && setBrowserRouterState) {
+    const restoredState = keptState ?? visibleState;
+    if (restoredState && setBrowserRouterState) {
       const setter = setBrowserRouterState;
       startTransition(() => {
-        setter(visibleState);
+        setter(restoredState);
       });
     }
     return true;
@@ -643,10 +654,15 @@ export function createAppBrowserNavigationController(
    * Settle all pending navigation renders through the supplied renderId. Only
    * the exact render whose layout effect ran is a successful commit; older
    * superseded renders and cleanup-only settlements resolve as no-commit.
+   * `keptRenderId` stays pending, because React is committing it.
    */
-  function settleNavigationCommits(renderId: number, committed: boolean): void {
+  function settleNavigationCommits(
+    renderId: number,
+    committed: boolean,
+    keptRenderId: number | null = null,
+  ): void {
     for (const [pendingId, pendingCommit] of pendingNavigationCommits) {
-      if (pendingId > renderId) {
+      if (pendingId > renderId || pendingId === keptRenderId) {
         continue;
       }
 

@@ -31,4 +31,26 @@ test.describe("raw history write during a navigation commit", () => {
     await expect(page).toHaveURL(`${BASE}/history-write-during-commit/layout-cleanup/b?x=1`);
     expect(await page.evaluate(() => history.length)).toBe(lengthBefore + 1);
   });
+
+  // A navigation that starts during the commit has not committed, so the raw
+  // write discards it. The render being committed stays visible.
+  for (const [name, path] of [
+    ["from a destination layout effect", "push-in-layout-effect"],
+    ["from a cleanup of the page being left", "push-in-cleanup"],
+  ] as const) {
+    test(`discards a navigation started ${name}`, async ({ page }) => {
+      await page.goto(`${BASE}/history-write-during-commit/${path}`);
+      await waitForAppRouterHydration(page);
+      const lengthBefore = await page.evaluate(() => history.length);
+
+      await page.locator("#to-dest").click();
+
+      await expect(page.locator("#dest")).toBeVisible();
+      await page.waitForLoadState("networkidle");
+      await expect(page.locator("#dest")).toBeVisible();
+      await expect(page.locator("#source, #final")).toHaveCount(0);
+      await expect(page).toHaveURL(`${BASE}/history-write-during-commit/${path}/dest?x=1`);
+      expect(await page.evaluate(() => history.length)).toBe(lengthBefore + 1);
+    });
+  }
 });
