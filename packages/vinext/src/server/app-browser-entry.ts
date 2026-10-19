@@ -86,6 +86,7 @@ import {
   createBasePathStrippedPathAndSearch,
   createSnapshotPathAndSearch,
   navigateDocumentDirectly,
+  type BrowserNavigationCommitEffect,
   type HistoryUpdateMode,
   type NavigationPayloadOutcome,
   type PendingBrowserRouterState,
@@ -370,6 +371,7 @@ const discardedServerActionRefreshScheduler = hasServerActions
     };
 const serverActionSupplementalRefreshCoordinator = createSupplementalRefreshCoordinator();
 const NavigationCommitSignal = browserNavigationController.NavigationCommitSignal;
+const NavigationUrlCommitSignal = browserNavigationController.NavigationUrlCommitSignal;
 const ACTION_HTTP_FALLBACK_ROBOTS_META_ATTR = "data-vinext-action-http-fallback";
 
 function syncServerActionHttpFallbackHead(status: number | null): void {
@@ -787,7 +789,7 @@ function createNavigationCommitEffect(options: {
   params: Record<string, string | string[]>;
   previousNextUrl: string | null;
   targetHistoryIndex?: number | null;
-}): (commit: { keepCurrentUrl: boolean; releaseSnapshot: boolean }) => void {
+}): BrowserNavigationCommitEffect {
   const {
     activeRoutePaths,
     bfcacheIds,
@@ -799,31 +801,36 @@ function createNavigationCommitEffect(options: {
     targetHistoryIndex,
   } = options;
 
-  return ({ keepCurrentUrl, releaseSnapshot }) => {
-    // Only update URL if this is still the active navigation.
-    // A newer navigation would have superseded this navigation id.
-    if (!browserNavigationController.isCurrentNavigation(navId)) {
-      // This transition was superseded before commit; balance the active
-      // snapshot counter without clearing pendingPathname ownership.
-      commitClientNavigationState(undefined, { releaseSnapshot });
-      return;
-    }
+  return {
+    commitUrl({ keepCurrentUrl }) {
+      // Only update URL if this is still the active navigation.
+      // A newer navigation would have superseded this navigation id.
+      if (!browserNavigationController.isCurrentNavigation(navId)) return;
 
-    historyController.commitNavigationHistory({
-      activeRoutePaths,
-      bfcacheIds,
-      href,
-      // Without an update mode the current entry keeps its URL and only
-      // records this render's metadata, as for a refresh.
-      historyUpdateMode: keepCurrentUrl ? undefined : historyUpdateMode,
-      previousNextUrl,
-      stageClientParams: () => stageClientParams(params),
-      targetHistoryIndex,
-    });
+      historyController.commitNavigationHistory({
+        activeRoutePaths,
+        bfcacheIds,
+        href,
+        // Without an update mode the current entry keeps its URL and only
+        // records this render's metadata, as for a refresh.
+        historyUpdateMode: keepCurrentUrl ? undefined : historyUpdateMode,
+        previousNextUrl,
+        stageClientParams: () => stageClientParams(params),
+        targetHistoryIndex,
+      });
 
-    // URL has been updated; the recovery hard-nav target is no longer needed.
-    clearAppNavigationFailureTarget(href);
-    commitClientNavigationState(navId, { releaseSnapshot });
+      // URL has been updated; the recovery hard-nav target is no longer needed.
+      clearAppNavigationFailureTarget(href);
+    },
+    publish({ releaseSnapshot }) {
+      if (!browserNavigationController.isCurrentNavigation(navId)) {
+        // This transition was superseded before commit; balance the active
+        // snapshot counter without clearing pendingPathname ownership.
+        commitClientNavigationState(undefined, { releaseSnapshot });
+        return;
+      }
+      commitClientNavigationState(navId, { releaseSnapshot });
+    },
   };
 }
 
@@ -1494,6 +1501,9 @@ function BrowserRoot({
   const routeTree = createElement(
     RedirectBoundary,
     null,
+    // Before the route tree, so the URL is written while the window still
+    // shows the page being left.
+    createElement(NavigationUrlCommitSignal, { renderId: treeState.renderId }),
     createElement(
       NavigationCommitSignal,
       { renderId: treeState.renderId },

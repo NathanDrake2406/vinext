@@ -19,6 +19,7 @@ export default function Page() {
         Load More
       </button>
       <Link href="/scroll-restoration/other">Go to Other</Link>
+      <Link href="/scroll-restoration/slow">Go to Slow</Link>
     </div>
   );
 }
