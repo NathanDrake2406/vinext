@@ -35,13 +35,9 @@ test.describe("App Router scroll restoration", () => {
     await expect.poll(() => page.evaluate(() => window.pageYOffset)).toEqual(scrollPosition);
   });
 
-  // Next.js writes the history entry in HistoryUpdater's insertion effect,
-  // before React changes the route tree's DOM:
-  // https://github.com/vercel/next.js/blob/v16.2.6/packages/next/src/client/components/app-router.tsx
-  // The browser saves the scroll position at pushState as the native position
-  // of the entry being left, and iOS Safari applies that position on Back
-  // after the router restores its own. A push after the commit saves the
-  // destination's position instead.
+  // The browser saves the scroll position at pushState for the entry being
+  // left, so the push must run before the route tree changes, as Next.js's
+  // HistoryUpdater does (https://github.com/cloudflare/vinext/issues/4095).
   for (const target of ["/scroll-restoration/other", "/scroll-restoration/slow"]) {
     test(`pushes ${target} while the page being left is still shown`, async ({ page }) => {
       await page.addInitScript(() => {

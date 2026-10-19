@@ -1501,8 +1501,6 @@ function BrowserRoot({
   const routeTree = createElement(
     RedirectBoundary,
     null,
-    // Before the route tree, so the URL is written while the window still
-    // shows the page being left.
     createElement(NavigationUrlCommitSignal, { renderId: treeState.renderId }),
     createElement(
       NavigationCommitSignal,

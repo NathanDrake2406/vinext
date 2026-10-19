@@ -63,17 +63,15 @@ type HardNavigationMode = "assign" | "replace";
 
 export type BrowserNavigationCommitEffect = {
   /**
-   * Write the navigation's history entry. It runs before React changes the
-   * route tree's DOM, so the browser saves the scroll position of the page
-   * being left as the native position of that entry. iOS Safari applies the
-   * native position on Back after the router restores its own.
+   * Runs before React changes the route tree's DOM, so the browser saves the
+   * scroll position of the page being left. iOS Safari applies that native
+   * position on Back after the router restores its own.
    */
   commitUrl(options: {
     // Keep the current URL instead of writing the navigation's own, because a
     // raw history write has replaced it since the optimistic shell committed.
     keepCurrentUrl: boolean;
   }): void;
-  /** Publish the committed navigation state to hooks after the commit. */
   publish(options: {
     // Whether this render still holds an active render snapshot to release.
     releaseSnapshot: boolean;
@@ -569,11 +567,9 @@ export function createAppBrowserNavigationController(
   }
 
   /**
-   * Finish the commit of a navigation render React is committing right now.
-   * NavigationUrlCommitSignal has already written its URL, but the rest of the
-   * commit normally runs in NavigationCommitSignal's layout effect, after the
-   * route's own layout effects. Called before a raw history write from a
-   * destination layout effect, so that write lands on a committed navigation.
+   * Publish the render React is committing now, before a raw history write
+   * from a destination layout effect. NavigationCommitSignal would otherwise
+   * publish it after that write.
    */
   function flushCommittingNavigationUrl(): void {
     if (committingNavigationRenderId !== null) {
@@ -601,12 +597,7 @@ export function createAppBrowserNavigationController(
     pendingNavigationPrePaintEffects.set(renderId, effect);
   }
 
-  /**
-   * Write the URL of the render React is committing, from an insertion effect
-   * that runs before the route tree's DOM changes. Next.js's HistoryUpdater
-   * writes the URL at the same point. Superseded renders are left to
-   * drainPrePaintEffects, which releases them without a URL write.
-   */
+  // Superseded renders are left to drainPrePaintEffects.
   function commitNavigationUrl(renderId: number): void {
     pendingNavigationPrePaintEffects.get(renderId)?.commitUrl();
   }
@@ -741,10 +732,9 @@ export function createAppBrowserNavigationController(
     }
   }
 
-  /**
-   * Rendered as a sibling before the route tree. React runs the insertion
-   * effects of an earlier sibling before it changes the DOM of a later one.
-   */
+  // Render before the route tree: React runs an earlier sibling's insertion
+  // effects before it changes a later sibling's DOM, as Next.js's
+  // HistoryUpdater relies on.
   function NavigationUrlCommitSignal(this: void, { renderId }: { renderId: number }): null {
     useInsertionEffect(() => {
       commitNavigationUrl(renderId);
@@ -1096,8 +1086,7 @@ export function createAppBrowserNavigationController(
       };
       queuePrePaintNavigationEffect(renderId, {
         commitUrl,
-        // The dev recovery boundary drains a render whose URL signal did not
-        // commit, so publish writes the URL first when it is still pending.
+        // The dev recovery drain can publish a render whose URL is not written.
         publish: () => {
           commitUrl();
           commitEffect.publish({ releaseSnapshot: snapshotRenderIds.delete(renderId) });
