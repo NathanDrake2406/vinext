@@ -782,8 +782,6 @@ test.describe("Shallow Routing (history.pushState/replaceState)", () => {
     });
     await expect(page.getByRole("heading", { name: "About" })).toBeVisible();
 
-    // The reload starts a new document, and its first render is the first
-    // tree snapshot that document records.
     await page.reload();
     await waitForAppRouterHydration(page);
     await expect(page.getByRole("heading", { name: "About" })).toBeVisible();

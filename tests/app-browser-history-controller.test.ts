@@ -551,9 +551,6 @@ describe("AppBrowserHistoryController snapshot restore", () => {
   });
 
   it("never restores a tree snapshot id allocated by an earlier document", () => {
-    // A reload or hard navigation starts a new document, but popstate can still
-    // deliver entries the earlier document wrote. Their ids name trees that
-    // only the earlier document held in memory.
     const earlierDocument = createController();
     const shallowState = createRouterState({
       navigationSnapshot: createClientNavigationRenderSnapshot(
@@ -600,7 +597,6 @@ describe("AppBrowserHistoryController snapshot restore", () => {
       }),
     ).toBe(false);
     expect(approveVisibleRestore).not.toHaveBeenCalled();
-    // Builds before document-scoped ids wrote plain counters.
     expect(readHistoryStateTreeSnapshotId({ __vinext_treeSnapshotId: 0 })).toBeNull();
   });
 

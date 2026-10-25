@@ -129,12 +129,6 @@ export class AppBrowserHistoryController {
   // still continue from the highest known app history.
   #currentHistoryTraversalIndex: number | null;
   #nextHistoryTraversalIndex: number;
-  // Tree snapshot ids outlive this document in history state, but the trees
-  // they name live only in its memory. A reload or a hard navigation can bring
-  // an entry written by an earlier document back through popstate, so every
-  // id carries this document's prefix and an older id never matches a tree
-  // here. Next.js stores the tree itself in history state and needs no
-  // prefix; vinext's trees hold React elements, which history cannot store.
   readonly #treeSnapshotIdPrefix = createDocumentTreeSnapshotIdPrefix();
   #currentTreeSnapshotId: string | null = null;
   #nextTreeSnapshotSequence = 0;
@@ -690,8 +684,6 @@ function areBfcacheIdMapsEqual(a: BfcacheIdMap | null, b: BfcacheIdMap | null): 
 }
 
 function createDocumentTreeSnapshotIdPrefix(): string {
-  // getRandomValues, unlike randomUUID, also works outside secure contexts,
-  // such as a dev server reached over a LAN address.
   const bytes = new Uint8Array(8);
   crypto.getRandomValues(bytes);
   return `${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}:`;

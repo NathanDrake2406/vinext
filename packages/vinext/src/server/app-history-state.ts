@@ -367,12 +367,6 @@ function isTreeSnapshotId(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
-/**
- * The id of the in-memory tree snapshot an entry restores. Ids are scoped to
- * the document that allocated them (see `AppBrowserHistoryController`), so an
- * id written by an earlier document, including the numeric ids of older
- * builds, never names a tree in this one.
- */
 export function readHistoryStateTreeSnapshotId(state: unknown): string | null {
   const value = readHistoryStateRecord(state)?.[VINEXT_TREE_SNAPSHOT_ID_HISTORY_STATE_KEY];
   return isTreeSnapshotId(value) ? value : null;
