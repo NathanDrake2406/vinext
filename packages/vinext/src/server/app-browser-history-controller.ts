@@ -114,9 +114,9 @@ export class AppBrowserHistoryController {
   // history can remain reachable for the document lifetime. Keep one current
   // candidate and promote only ids claimed by those history writes; ordinary
   // renders are released when the candidate advances.
-  readonly #treeSnapshots = new Map<number, AppRouterState>();
-  readonly #treeSnapshotClaimCounts = new Map<number, number>();
-  readonly #treeSnapshotClaimByHistoryIndex = new Map<number, number>();
+  readonly #treeSnapshots = new Map<string, AppRouterState>();
+  readonly #treeSnapshotClaimCounts = new Map<string, number>();
+  readonly #treeSnapshotClaimByHistoryIndex = new Map<number, string>();
   readonly #readHistoryState: () => unknown;
   readonly #readCurrentHref: () => string;
   readonly #pushHistoryState: (state: unknown, href: string) => void;
@@ -129,9 +129,16 @@ export class AppBrowserHistoryController {
   // still continue from the highest known app history.
   #currentHistoryTraversalIndex: number | null;
   #nextHistoryTraversalIndex: number;
-  #currentTreeSnapshotId: number | null = null;
-  #nextTreeSnapshotId = 0;
-  #treeSnapshotIdPendingFreshState: number | null = null;
+  // Tree snapshot ids outlive this document in history state, but the trees
+  // they name live only in its memory. A reload or a hard navigation can bring
+  // an entry written by an earlier document back through popstate, so every
+  // id carries this document's prefix and an older id never matches a tree
+  // here. Next.js stores the tree itself in history state and needs no
+  // prefix; vinext's trees hold React elements, which history cannot store.
+  readonly #treeSnapshotIdPrefix = createDocumentTreeSnapshotIdPrefix();
+  #currentTreeSnapshotId: string | null = null;
+  #nextTreeSnapshotSequence = 0;
+  #treeSnapshotIdPendingFreshState: string | null = null;
 
   constructor(deps: AppBrowserHistoryControllerDeps) {
     this.#readHistoryState = deps.readHistoryState;
@@ -245,7 +252,9 @@ export class AppBrowserHistoryController {
       this.#treeSnapshots.has(historyTreeSnapshotId) &&
       (historyTreeSnapshotId === this.#treeSnapshotIdPendingFreshState ||
         this.#treeSnapshotClaimCounts.has(historyTreeSnapshotId));
-    const treeSnapshotId = updatesExistingTree ? historyTreeSnapshotId : this.#nextTreeSnapshotId++;
+    const treeSnapshotId = updatesExistingTree
+      ? historyTreeSnapshotId
+      : `${this.#treeSnapshotIdPrefix}${this.#nextTreeSnapshotSequence++}`;
     this.#treeSnapshotIdPendingFreshState = null;
     const previousTreeSnapshotId = this.#currentTreeSnapshotId;
     this.#currentTreeSnapshotId = treeSnapshotId;
@@ -335,7 +344,7 @@ export class AppBrowserHistoryController {
     }
   }
 
-  #claimTreeSnapshotAtHistoryIndex(historyIndex: number, treeSnapshotId: number): void {
+  #claimTreeSnapshotAtHistoryIndex(historyIndex: number, treeSnapshotId: string): void {
     const previousTreeSnapshotId = this.#treeSnapshotClaimByHistoryIndex.get(historyIndex);
     if (previousTreeSnapshotId === treeSnapshotId) return;
     if (previousTreeSnapshotId !== undefined) {
@@ -365,7 +374,7 @@ export class AppBrowserHistoryController {
     }
   }
 
-  #releaseTreeSnapshotClaim(treeSnapshotId: number): void {
+  #releaseTreeSnapshotClaim(treeSnapshotId: string): void {
     const claimCount = this.#treeSnapshotClaimCounts.get(treeSnapshotId);
     if (claimCount === undefined) return;
     if (claimCount > 1) {
@@ -678,4 +687,12 @@ function areBfcacheIdMapsEqual(a: BfcacheIdMap | null, b: BfcacheIdMap | null): 
   // Equal lengths make this bidirectional: if every a entry exists in b with
   // the same value, b cannot contain an extra distinct key.
   return aEntries.every(([key, value]) => b[key] === value);
+}
+
+function createDocumentTreeSnapshotIdPrefix(): string {
+  // getRandomValues, unlike randomUUID, also works outside secure contexts,
+  // such as a dev server reached over a LAN address.
+  const bytes = new Uint8Array(8);
+  crypto.getRandomValues(bytes);
+  return `${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}:`;
 }

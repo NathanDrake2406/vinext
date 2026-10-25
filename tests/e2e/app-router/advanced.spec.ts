@@ -767,6 +767,33 @@ test.describe("Shallow Routing (history.pushState/replaceState)", () => {
     );
   });
 
+  test("replaceState entry restores its own tree after a reload on a later entry", async ({
+    page,
+  }) => {
+    await page.goto(`${BASE}/shallow-test`);
+    await waitForAppRouterHydration(page);
+
+    await page.locator('[data-testid="replace-sort"]').click({ noWaitAfter: true });
+    await expect(page.locator('[data-testid="search"]')).toHaveText("search: sort=name");
+    await page.evaluate(() => {
+      const router = window.next?.router;
+      if (!router) throw new Error("window.next.router is not installed");
+      void router.push("/about");
+    });
+    await expect(page.getByRole("heading", { name: "About" })).toBeVisible();
+
+    // The reload starts a new document, and its first render is the first
+    // tree snapshot that document records.
+    await page.reload();
+    await waitForAppRouterHydration(page);
+    await expect(page.getByRole("heading", { name: "About" })).toBeVisible();
+
+    await page.goBack();
+    await expect(page).toHaveURL(/\/shallow-test\?sort=name$/);
+    await expect(page.getByRole("heading", { name: "Shallow Routing Test" })).toBeVisible();
+    await expect(page.locator('[data-testid="search"]')).toHaveText("search: sort=name");
+  });
+
   test("pushState entry survives a same-index app replace", async ({ page }) => {
     await page.goto(`${BASE}/shallow-test`);
     await waitForAppRouterHydration(page);

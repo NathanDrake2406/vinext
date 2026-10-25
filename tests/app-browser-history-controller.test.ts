@@ -9,6 +9,7 @@ import {
   createSnapshotPathAndSearch,
 } from "../packages/vinext/src/server/app-browser-navigation-controller.js";
 import {
+  createExternalHistoryStatePreservingMetadata,
   createHistoryStateWithNavigationMetadata,
   createHistoryStateWithTreeSnapshotId,
   isExternalHistoryState,
@@ -246,7 +247,7 @@ describe("AppBrowserHistoryController hash-only navigation", () => {
     const bfcacheIds = { "page:/shallow-test": "shallow-page" };
     const { controller, store } = createController({
       initialState: createHistoryStateWithNavigationMetadata(
-        { __vinext_externalHistoryState: true, __vinext_treeSnapshotId: 7 },
+        { __vinext_externalHistoryState: true, __vinext_treeSnapshotId: "copied-tree" },
         {
           bfcacheIds,
           bfcacheVersion: 0,
@@ -261,7 +262,7 @@ describe("AppBrowserHistoryController hash-only navigation", () => {
 
     const writtenState = readWrittenState(store.pushed[0]);
     expect(writtenState.__vinext_externalHistoryState).toBe(true);
-    expect(readHistoryStateTreeSnapshotId(writtenState)).toBe(7);
+    expect(readHistoryStateTreeSnapshotId(writtenState)).toBe("copied-tree");
     expect(writtenState.__vinext_bfcacheIds).toEqual(bfcacheIds);
     expect(readHistoryStateTraversalIndex(writtenState)).toBe(1);
   });
@@ -549,6 +550,60 @@ describe("AppBrowserHistoryController snapshot restore", () => {
     expect(approveVisibleRestore.mock.calls[0]?.[0].state).toBe(shallowState);
   });
 
+  it("never restores a tree snapshot id allocated by an earlier document", () => {
+    // A reload or hard navigation starts a new document, but popstate can still
+    // deliver entries the earlier document wrote. Their ids name trees that
+    // only the earlier document held in memory.
+    const earlierDocument = createController();
+    const shallowState = createRouterState({
+      navigationSnapshot: createClientNavigationRenderSnapshot(
+        "https://example.com/shallow-test?sort=name",
+        {},
+      ),
+      routeId: "route:/shallow-test",
+    });
+    seedSnapshotAtIndex(earlierDocument.controller, 0, shallowState);
+    earlierDocument.controller.claimCurrentHistoryTreeSnapshot(
+      "replace",
+      earlierDocument.store.state,
+    );
+    const earlierEntry = createExternalHistoryStatePreservingMetadata(
+      null,
+      earlierDocument.store.state,
+    );
+    expect(readHistoryStateTreeSnapshotId(earlierEntry)).not.toBeNull();
+
+    const reloadedDocument = createController({
+      initialState: createHistoryStateWithNavigationMetadata(null, {
+        previousNextUrl: null,
+        traversalIndex: 1,
+      }),
+      initialHref: "https://example.com/about",
+    });
+    seedSnapshotAtIndex(
+      reloadedDocument.controller,
+      1,
+      createRouterState({
+        navigationSnapshot: createClientNavigationRenderSnapshot("https://example.com/about", {}),
+        routeId: "route:/about",
+      }),
+    );
+
+    expect(reloadedDocument.controller.isCurrentExternalHistoryTree(earlierEntry)).toBe(false);
+    const approveVisibleRestore = vi.fn(() => true);
+    expect(
+      reloadedDocument.controller.restoreHistorySnapshot({
+        historyState: earlierEntry,
+        preferExternalSnapshot: true,
+        stageClientParams: vi.fn(),
+        approveVisibleRestore,
+      }),
+    ).toBe(false);
+    expect(approveVisibleRestore).not.toHaveBeenCalled();
+    // Builds before document-scoped ids wrote plain counters.
+    expect(readHistoryStateTreeSnapshotId({ __vinext_treeSnapshotId: 0 })).toBeNull();
+  });
+
   it("restores the completed tree for entries that remembered an optimistic shell", () => {
     // Next.js shares one tree between an optimistic shell and the data that
     // fills it in, so going back to the shell's entry after a shallow history
@@ -680,7 +735,7 @@ describe("AppBrowserHistoryController snapshot restore", () => {
 
   it("releases raw replace claims when app replace overwrites the same entry", () => {
     const { controller, store } = createController();
-    const overwrittenTreeSnapshotIds: Array<number | null> = [];
+    const overwrittenTreeSnapshotIds: Array<string | null> = [];
     seedSnapshotAtIndex(controller, 0, createRouterState({ routeId: "route:/cycle-0" }));
 
     for (let render = 1; render <= 52; render += 1) {
@@ -750,7 +805,7 @@ describe("AppBrowserHistoryController snapshot restore", () => {
 
   it("releases claimed snapshots when a push truncates forward history", () => {
     const { controller, store } = createController();
-    const truncatedTreeSnapshotIds: Array<number | null> = [];
+    const truncatedTreeSnapshotIds: Array<string | null> = [];
 
     for (let render = 0; render <= 52; render += 1) {
       seedSnapshotAtIndex(controller, 0, createRouterState({ routeId: `route:/source-${render}` }));
